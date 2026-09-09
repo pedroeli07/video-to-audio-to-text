@@ -51,6 +51,20 @@
           </select>
         </div>
         <div class="row">
+          <label class="label" for="denoise">Reduzir ruído</label>
+          <span class="value denoise">
+            <label class="check">
+              <input type="checkbox" id="denoise" />
+              Limpar chiado e nivelar o volume
+            </label>
+            <select id="denoise-level" class="hidden">
+              <option value="leve" selected>Leve (recomendado)</option>
+              <option value="forte">Forte (gravação bem ruim)</option>
+            </select>
+          </span>
+        </div>
+        <p id="denoise-hint" class="hint hidden"></p>
+        <div class="row">
           <span class="label">Pasta de saída</span>
           <span class="value output-dir">
             <span id="output-dir-text">Mesma pasta do vídeo</span>

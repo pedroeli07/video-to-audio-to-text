@@ -21,18 +21,65 @@ problemas: roda offline e não tem limite prático de tamanho ou duração.
 - Extrair o áudio em **MP3** (padrão, mono 128 kbps) ou **WAV** (PCM 16 bits,
   16 kHz mono — sem perdas e já no formato que a maioria dos modelos de
   transcrição prefere, pensando na Fase 2).
+- **Redução de ruído opcional** (checkbox), em dois níveis — remove chiado de
+  microfone, zumbido e ar-condicionado, e nivela o volume. Veja
+  [Como funciona a redução de ruído](#como-funciona-a-redução-de-ruído).
 - **Barra de progresso real**, calculada a partir da duração do vídeo, com
   tempo processado / tempo total.
 - **Cancelar** uma extração em andamento (o arquivo parcial é removido).
 - Salvar na **mesma pasta do vídeo** (padrão) ou numa **pasta de saída
   escolhida**. O nome do áudio segue o nome do vídeo, e arquivos existentes
-  nunca são sobrescritos (`reuniao.mp3`, `reuniao (1).mp3`, …).
+  nunca são sobrescritos (`reuniao.mp3`, `reuniao (1).mp3`, …). Com a limpeza
+  ligada, o nome ganha o sufixo ` - limpo`, para dar para comparar as versões.
 - Botões para **abrir a pasta** do resultado ou **abrir o áudio** no player padrão.
 - **Erros claros na interface**: arquivo que não é vídeo, vídeo sem faixa de
   áudio, falha do ffmpeg (com as últimas linhas do log).
 
 A UI **nunca trava**: o ffmpeg roda como processo filho no main process, e o
 renderer só recebe eventos de progresso.
+
+## Como funciona a redução de ruído
+
+Tudo acontece **numa passada só**, durante a própria extração — não é preciso
+extrair e depois tratar o áudio em outro programa.
+
+Antes de converter, o app faz uma análise rápida (os primeiros 2 minutos) para
+**medir o piso de ruído real da gravação**. Esse valor alimenta o denoiser: sem
+ele, um ajuste fixo ou não limparia nada numa gravação ruim, ou comeria a voz
+numa gravação que já estava boa.
+
+A cadeia de filtros do ffmpeg é:
+
+| Filtro        | Leve            | Forte             | Para que serve                                                   |
+| ------------- | --------------- | ----------------- | ---------------------------------------------------------------- |
+| `highpass`    | 80 Hz           | 100 Hz            | Corta zumbido de rede, trepidação de mesa e sopro                 |
+| `afftdn`      | `nr=18`         | `nr=28`           | Denoiser por FFT — é o que mata o chiado constante (`nf` medido)  |
+| `lowpass`     | —               | 9 kHz             | Acima disso, em reunião, quase só sobra chiado                    |
+| `deesser`     | —               | `i=0.4`           | Segura o "sss" estridente que o denoiser realça                   |
+| `dynaudnorm`  | ✓               | ✓ (mais firme)    | Nivela o volume de quem falou longe do microfone                  |
+
+A ordem importa: primeiro se tira o que claramente não é voz, depois o
+denoiser, e só no fim se normaliza o volume — normalizar antes só amplificaria
+o ruído.
+
+**Qual escolher?** Comece no **Leve**: ele resolve o caso comum (chiado de
+microfone, ar-condicionado) sem risco de estragar a voz. Use o **Forte** só em
+gravações realmente ruins — ele limita a faixa de frequências à da voz, o que
+limpa mais, mas pode deixar o som um pouco abafado ou metálico.
+
+Medições em áudio de teste (relação voz/chiado, quanto maior melhor):
+
+| Gravação      | Sem limpeza | Leve       | Forte      |
+| ------------- | ----------- | ---------- | ---------- |
+| Bem ruidosa   | +1,1 dB     | **+7,0 dB** | +7,8 dB   |
+| Já limpa      | +27,1 dB    | **+40,9 dB** | +42,7 dB |
+
+O custo é baixo: numa gravação de 20 minutos, a conversão passou de 2,7 s para
+3,1 s (análise + filtros incluídos).
+
+> Se mesmo assim ficar ruidoso, o ganho maior costuma estar na origem: microfone
+> mais perto de quem fala e supressão de ruído ativada na própria ferramenta de
+> reunião (Meet/Teams/Zoom) na hora de gravar.
 
 ## Requisitos
 
@@ -86,7 +133,7 @@ executáveis, e o código já ajusta o caminho para `app.asar.unpacked`.
 src/
 ├─ main/                  # Main process (Node.js): arquivos, ffmpeg, IPC
 │  ├─ main.ts             # janela, handlers de IPC
-│  ├─ audio-extractor.ts  # ffprobe + conversão, progresso e cancelamento
+│  ├─ audio-extractor.ts  # ffprobe, análise de ruído, filtros e conversão
 │  └─ ffmpeg-setup.ts     # resolve os binários empacotados (asar.unpacked)
 ├─ preload/
 │  └─ preload.ts          # contextBridge: a única ponte renderer ⇄ main
@@ -144,6 +191,8 @@ citação da reunião de origem.
 | "não parece ser um vídeo válido"                      | O arquivo pode estar corrompido ou incompleto. Teste abri-lo num player.                          |
 | "não possui nenhuma faixa de áudio"                   | A gravação foi feita sem áudio — não há o que extrair.                                            |
 | Progresso fica em 0% e a duração aparece "desconhecida" | Alguns arquivos (gravações interrompidas) não têm duração nos metadados; a conversão ainda funciona. |
+| Voz ficou abafada ou "metálica"                       | Você usou o nível Forte. Refaça no Leve — o arquivo antigo não é sobrescrito.                        |
+| Ainda tem chiado com a limpeza ligada                 | Tente o nível Forte. Ruído variável (obra, conversa ao fundo) é bem mais difícil que chiado constante. |
 | Erro do ffmpeg no app instalado                       | Confirme que o build manteve o `asarUnpack` do `package.json`.                                     |
 
 ## Licença

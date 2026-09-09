@@ -58,6 +58,9 @@ const infoName = $<HTMLElement>('info-name');
 const infoSize = $<HTMLElement>('info-size');
 const infoDuration = $<HTMLElement>('info-duration');
 const formatSelect = $<HTMLSelectElement>('format');
+const denoiseCheck = $<HTMLInputElement>('denoise');
+const denoiseLevel = $<HTMLSelectElement>('denoise-level');
+const denoiseHint = $<HTMLElement>('denoise-hint');
 const outputDirText = $<HTMLElement>('output-dir-text');
 const btnChooseDir = $<HTMLButtonElement>('btn-choose-dir');
 const btnResetDir = $<HTMLButtonElement>('btn-reset-dir');
@@ -110,6 +113,8 @@ function setRunning(value: boolean): void {
   btnCancel.classList.toggle('hidden', !value);
   dropzone.style.pointerEvents = value ? 'none' : '';
   formatSelect.disabled = value;
+  denoiseCheck.disabled = value;
+  denoiseLevel.disabled = value;
   btnChooseDir.disabled = value;
 }
 
@@ -187,6 +192,22 @@ dropzone.addEventListener('drop', async (event) => {
 window.addEventListener('dragover', (e) => e.preventDefault());
 window.addEventListener('drop', (e) => e.preventDefault());
 
+// Redução de ruído: o select de intensidade e a dica só aparecem quando ligado.
+function renderDenoise(): void {
+  const on = denoiseCheck.checked;
+  denoiseLevel.classList.toggle('hidden', !on);
+  denoiseHint.classList.toggle('hidden', !on);
+  if (!on) return;
+  denoiseHint.textContent =
+    denoiseLevel.value === 'forte'
+      ? 'Corta ruído agressivamente e limita a faixa da voz. Use quando o áudio está bem ruim — pode deixar a voz um pouco abafada.'
+      : 'Remove ruído de fundo constante (chiado, ar-condicionado) e nivela o volume de quem falou longe do microfone.';
+}
+
+denoiseCheck.addEventListener('change', renderDenoise);
+denoiseLevel.addEventListener('change', renderDenoise);
+renderDenoise();
+
 // Pasta de saída
 btnChooseDir.addEventListener('click', async () => {
   const dir = await api.selectOutputDir();
@@ -205,9 +226,16 @@ btnResetDir.addEventListener('click', () => {
 
 // Progresso vindo do main
 api.onProgress((p: ExtractProgress) => {
+  if (p.phase === 'analyzing') {
+    // A análise não tem percentual; mostramos a barra indeterminada em 0.
+    progressBar.style.width = '0%';
+    progressText.textContent = 'Analisando o ruído do áudio…';
+    return;
+  }
   progressBar.style.width = `${p.percent.toFixed(1)}%`;
   const done = formatDuration(p.processedSeconds);
   const total = formatDuration(p.totalSeconds);
+  // Com filtros de limpeza a conversão fica mais lenta; o progresso é o mesmo.
   progressText.textContent =
     p.totalSeconds > 0
       ? `Processando… ${p.percent.toFixed(1)}% (${done} de ${total})`
@@ -228,6 +256,9 @@ btnExtract.addEventListener('click', async () => {
   const result = await api.extractAudio({
     inputPath: selectedVideo.path,
     format: formatSelect.value as 'mp3' | 'wav',
+    denoise: denoiseCheck.checked
+      ? (denoiseLevel.value as 'leve' | 'forte')
+      : 'off',
     outputDir: customOutputDir ?? undefined,
   });
 

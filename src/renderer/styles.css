@@ -109,3 +109,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .status { margin: 0; white-space: pre-wrap; }
 .status.error { color: var(--danger); }
 .status.success { color: var(--ok); }
+
+.denoise { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.check { display: flex; gap: 7px; align-items: center; cursor: pointer; }
+.check input { accent-color: var(--accent); width: 16px; height: 16px; }
+.hint { margin: -4px 0 0; padding-left: 142px; color: var(--muted); font-size: 13px; }
