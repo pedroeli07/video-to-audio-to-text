@@ -59,106 +59,74 @@ export async function probeVideo(inputPath: string): Promise<VideoInfo> {
 }
 
 /**
- * Mede o piso de ruído do áudio em dBFS, com o filtro `astats`.
- *
- * Isso existe porque o denoiser (`afftdn`) precisa saber o quão alto é o
- * ruído: com um valor fixo, ou ele não limpa nada (gravação ruidosa) ou come
- * a voz junto (gravação já boa). Analisamos só os primeiros
- * ANALYSIS_SECONDS — é rápido e suficiente para caracterizar o ruído
- * constante de uma sala/microfone.
- *
- * Retorna `null` se não der para medir; nesse caso usamos um padrão seguro.
+ * Um caminho só pode ir para dentro de um filtergraph se não tiver aspa
+ * simples: o parser do ffmpeg consome a aspa em qualquer forma de escape
+ * (testado — `\'`, `\\'` e `'\''` todos falham). Quem chama deve garantir
+ * um caminho sem aspas (veja resolveModelPath em rnnoise.ts).
  */
-const ANALYSIS_SECONDS = 120;
-
-export async function measureNoiseFloor(
-  inputPath: string,
-  /** Recebe o comando para que a análise também possa ser cancelada. */
-  register?: (command: FfmpegCommand) => void
-): Promise<number | null> {
-  setupFfmpeg();
-
-  return new Promise((resolve) => {
-    let noiseFloor: number | null = null;
-
-    const command = ffmpeg(inputPath)
-      .noVideo()
-      .duration(ANALYSIS_SECONDS)
-      .audioFilters('astats=metadata=1')
-      .format('null')
-      .on('stderr', (line: string) => {
-        // A linha vem como "[Parsed_astats_0 @ ...] Noise floor dB: -48.123"
-        const match = /Noise floor dB:\s*(-?\d+(?:\.\d+)?)/.exec(line);
-        if (match) {
-          const value = Number(match[1]);
-          // Pegamos o menor valor visto (canal mais silencioso / medida global).
-          if (Number.isFinite(value) && (noiseFloor === null || value < noiseFloor)) {
-            noiseFloor = value;
-          }
-        }
-      })
-      .on('error', () => resolve(null))
-      .on('end', () => resolve(noiseFloor));
-
-    register?.(command);
-    command.save('-');
-  });
+export function isFilterSafePath(filePath: string): boolean {
+  return !filePath.includes("'");
 }
 
 /**
- * Converte o piso de ruído medido no parâmetro `nf` do afftdn.
- * O filtro só aceita a faixa [-80, -20]; damos 2 dB de folga para cima para
- * o denoiser pegar o ruído inteiro sem morder o começo das palavras.
+ * Escapa um caminho para uso como valor de opção dentro de um filtergraph.
+ *
+ * O parser do ffmpeg trata `\` como escape e `:` como separador de opções,
+ * então um caminho do Windows (`C:\Users\...`) quebra o filtro se for passado
+ * cru — é a falha clássica que só aparece no app instalado. A ordem importa:
+ * primeiro dobramos as barras invertidas, depois escapamos os dois-pontos.
  */
-export function noiseFloorToNf(noiseFloor: number | null): number {
-  // -35 dBFS é um piso típico de gravação de reunião; serve de padrão seguro.
-  const measured = noiseFloor ?? -35;
-  return Math.max(-80, Math.min(-20, Math.round(measured + 2)));
+export function escapeFilterPath(filePath: string): string {
+  return filePath.replace(/\\/g, '\\\\').replace(/:/g, '\\:');
 }
 
 /**
- * Cadeia de filtros de áudio para limpar ruído.
+ * Cadeia de filtros de limpeza de áudio.
  *
- * A ordem importa: primeiro tiramos o que claramente não é voz (ruído grave de
- * ar-condicionado/mesa), depois o denoiser estatístico, e só no fim
- * normalizamos o volume — normalizar antes só amplificaria o ruído.
+ * O trabalho pesado é do `arnndn`: o RNNoise é uma rede neural treinada para
+ * separar VOZ de ruído — a cada quadro de 10 ms ela estima se há fala e o
+ * quanto de cada banda de frequência é ruído, e atenua só o ruído. É por isso
+ * que ele funciona onde os filtros clássicos falham: um denoiser espectral
+ * (afftdn) só sabe "o que é constante", então ou deixa passar o ruído ou come
+ * a voz junto. Nos testes deste projeto o afftdn sozinho chegou a piorar o
+ * áudio (veja o README).
  *
- * - highpass: corta abaixo de 80/100 Hz (zumbido, trepidação, sopro de mesa).
- * - afftdn:   denoiser por FFT — é ele que realmente mata o "chiado" constante.
- *             `nf` é o piso de ruído do arquivo (medido antes, veja
- *             measureNoiseFloor) e `nr` quantos dB ele reduz.
- * - lowpass:  (só no forte) corta acima de 9 kHz, onde em gravação de reunião
- *             quase só sobra chiado — voz inteligível vive bem abaixo disso.
- * - deesser:  (só no forte) segura o "sss" estridente que o denoiser realça.
- * - dynaudnorm: nivela o volume ao longo do tempo, então quem falou longe do
- *             microfone fica audível. `g`/`f` são a janela de suavização —
- *             valores altos evitam o efeito de "bombeamento" do volume.
+ * - 'leve':  RNNoise com `mix=0.85`, ou seja, 15% do sinal original é
+ *            mantido. Isso mascara os artefatos da rede e é o que teve melhor
+ *            resultado médio, inclusive em gravação que já estava boa.
+ * - 'forte': RNNoise em mix cheio + um `afftdn` leve para varrer o chiado
+ *            residual. Ganha em gravação muito ruidosa, ao custo de mais
+ *            artefato quando o áudio já era razoável.
  *
- * Retorna [] quando o nível é 'off' (áudio sai exatamente como no vídeo).
+ * `normalize` (dynaudnorm) é independente do ruído: nivela o volume ao longo
+ * do tempo, para quem falou longe do microfone ficar audível.
  */
 export function buildDenoiseFilters(
   level: DenoiseLevel,
-  noiseFloor: number | null
+  modelPath: string,
+  normalize = false
 ): string[] {
-  const nf = noiseFloorToNf(noiseFloor);
+  const filters: string[] = [];
+  if (level !== 'off' && !isFilterSafePath(modelPath)) {
+    throw new Error(
+      'O caminho do modelo de redução de ruído contém uma aspa simples, ' +
+        'que o ffmpeg não aceita. Instale o app em outra pasta.'
+    );
+  }
+  const model = escapeFilterPath(modelPath);
 
   if (level === 'leve') {
-    return [
-      'highpass=f=80',
-      `afftdn=nr=18:nf=${nf}:nt=w`,
-      'dynaudnorm=f=250:g=15:p=0.9',
-    ];
+    filters.push(`arnndn=m=${model}:mix=0.85`);
+  } else if (level === 'forte') {
+    filters.push(`arnndn=m=${model}`);
+    filters.push('afftdn=nr=10:nf=-40:nt=w');
   }
-  if (level === 'forte') {
-    return [
-      'highpass=f=100',
-      `afftdn=nr=28:nf=${nf}:nt=w`,
-      'lowpass=f=9000',
-      'deesser=i=0.4',
-      'dynaudnorm=f=200:g=15:p=0.95',
-    ];
-  }
-  return [];
+
+  // Nivelamento é opcional e vem por último: normalizar antes de limpar só
+  // amplificaria o ruído.
+  if (normalize) filters.push('dynaudnorm=f=250:g=15:p=0.9');
+
+  return filters;
 }
 
 /** Codec/bitrate por formato. WAV é PCM (sem perdas, arquivo bem maior). */
@@ -210,6 +178,21 @@ function timemarkToSeconds(timemark: string | undefined): number {
   return parts[0] * 3600 + parts[1] * 60 + parts[2];
 }
 
+/**
+ * Entrada do job: as opções vindas da UI mais o caminho do modelo do RNNoise,
+ * resolvido pelo main process (este módulo é propositalmente independente do
+ * Electron, para poder ser testado com node puro).
+ */
+export interface ExtractionInput extends ExtractOptions {
+  /** Caminho do .rnnn. Obrigatório quando denoise !== 'off'. */
+  modelPath?: string;
+  /**
+   * Quando presente, converte só um trecho — usado pela prévia, para o
+   * usuário conferir o resultado das opções sem processar 1 h de reunião.
+   */
+  preview?: { startSeconds: number; durationSeconds: number };
+}
+
 /** Handle de um job em andamento, para permitir cancelamento. */
 export interface ExtractionJob {
   promise: Promise<{ outputPath: string; durationSeconds: number }>;
@@ -222,7 +205,7 @@ export interface ExtractionJob {
  * vídeos de várias horas / vários GB.
  */
 export function startExtraction(
-  options: ExtractOptions,
+  options: ExtractionInput,
   onProgress: (p: ExtractProgress) => void
 ): ExtractionJob {
   setupFfmpeg();
@@ -246,34 +229,46 @@ export function startExtraction(
 
     // Marcamos o nome quando há limpeza, para ficar fácil comparar com o original.
     const denoise = options.denoise ?? 'off';
+    const modelPath = options.modelPath ?? '';
+    if (denoise !== 'off' && !modelPath) {
+      throw new Error('Modelo de redução de ruído não informado.');
+    }
+    const suffix = options.preview
+      ? ' - previa'
+      : denoise === 'off'
+        ? ''
+        : ' - limpo';
     const outputPath = resolveOutputPath(
       options.inputPath,
       options.format,
       outputDir,
-      denoise === 'off' ? '' : ' - limpo'
+      suffix
     );
-    const totalSeconds = info.durationSeconds;
+    // Numa prévia, o "total" para o progresso é a duração do trecho.
+    const totalSeconds = options.preview
+      ? options.preview.durationSeconds
+      : info.durationSeconds;
 
     // Só medimos o ruído se a limpeza estiver ligada (custa uma passada rápida).
-    let noiseFloor: number | null = null;
-    if (denoise !== 'off') {
-      onProgress({ phase: 'analyzing', percent: 0, processedSeconds: 0, totalSeconds });
-      noiseFloor = await measureNoiseFloor(options.inputPath, (cmd) => {
-        command = cmd;
-        // Se o cancelamento chegou antes de o comando existir, mata agora.
-        if (canceled) cmd.kill('SIGKILL');
-      });
-      if (canceled) throw new Error('CANCELED');
-    }
-
     await new Promise<void>((resolve, reject) => {
       // Guardamos as últimas linhas do stderr para dar um erro útil na UI.
       let stderrTail: string[] = [];
 
       const base = ffmpeg(options.inputPath).noVideo();
 
+      // Prévia: pula para o meio da gravação e converte só alguns segundos.
+      // seekInput (antes do -i) é muito mais rápido em arquivos grandes.
+      if (options.preview) {
+        base
+          .seekInput(options.preview.startSeconds)
+          .duration(options.preview.durationSeconds);
+      }
+
       // Filtros de limpeza (nenhum quando denoise === 'off').
-      const filters = buildDenoiseFilters(denoise, noiseFloor);
+      const filters =
+        denoise === 'off'
+          ? []
+          : buildDenoiseFilters(denoise, modelPath, options.normalize ?? false);
       if (filters.length > 0) base.audioFilters(filters);
 
       command = applyFormat(base, options.format)
@@ -288,7 +283,7 @@ export function startExtraction(
               ? Math.min(100, (processedSeconds / totalSeconds) * 100)
               : // Sem duração conhecida, caímos no percent estimado do ffmpeg.
                 Math.min(100, Math.max(0, progress.percent ?? 0));
-          onProgress({ phase: 'converting', percent, processedSeconds, totalSeconds });
+          onProgress({ percent, processedSeconds, totalSeconds });
         })
         .on('error', (err) => {
           if (canceled) {
@@ -304,12 +299,7 @@ export function startExtraction(
           );
         })
         .on('end', () => {
-          onProgress({
-            phase: 'converting',
-            percent: 100,
-            processedSeconds: totalSeconds,
-            totalSeconds,
-          });
+          onProgress({ percent: 100, processedSeconds: totalSeconds, totalSeconds });
           resolve();
         });
 

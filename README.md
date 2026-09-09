@@ -21,9 +21,11 @@ problemas: roda offline e não tem limite prático de tamanho ou duração.
 - Extrair o áudio em **MP3** (padrão, mono 128 kbps) ou **WAV** (PCM 16 bits,
   16 kHz mono — sem perdas e já no formato que a maioria dos modelos de
   transcrição prefere, pensando na Fase 2).
-- **Redução de ruído opcional** (checkbox), em dois níveis — remove chiado de
-  microfone, zumbido e ar-condicionado, e nivela o volume. Veja
+- **Redução de ruído por rede neural** (opcional, dois níveis) — o RNNoise
+  identifica a voz quadro a quadro e atenua só o resto. Veja
   [Como funciona a redução de ruído](#como-funciona-a-redução-de-ruído).
+- **Prévia de 30 segundos** para testar as opções antes de processar o vídeo inteiro.
+- **Nivelamento de volume** opcional, para quem falou longe do microfone.
 - **Barra de progresso real**, calculada a partir da duração do vídeo, com
   tempo processado / tempo total.
 - **Cancelar** uma extração em andamento (o arquivo parcial é removido).
@@ -40,46 +42,66 @@ renderer só recebe eventos de progresso.
 
 ## Como funciona a redução de ruído
 
-Tudo acontece **numa passada só**, durante a própria extração — não é preciso
-extrair e depois tratar o áudio em outro programa.
+A limpeza usa o **RNNoise** (filtro `arnndn` do ffmpeg): uma rede neural
+treinada especificamente para separar **voz** de ruído. A cada quadro de 10 ms
+ela estima se há fala e o quanto de cada banda de frequência é ruído, e atenua
+só o ruído — é o "detectar quem está falando e limpar o resto" na prática.
 
-Antes de converter, o app faz uma análise rápida (os primeiros 2 minutos) para
-**medir o piso de ruído real da gravação**. Esse valor alimenta o denoiser: sem
-ele, um ajuste fixo ou não limparia nada numa gravação ruim, ou comeria a voz
-numa gravação que já estava boa.
+Isso é diferente de um denoiser espectral clássico (`afftdn`), que só sabe
+distinguir "o que é constante": ele acaba ou deixando o ruído passar, ou comendo
+a voz junto. Nos testes deste projeto o afftdn chegou a **piorar** o áudio.
 
-A cadeia de filtros do ffmpeg é:
+Tudo acontece numa passada só, durante a extração. Não é preciso extrair e
+depois tratar em outro programa.
 
-| Filtro        | Leve            | Forte             | Para que serve                                                   |
-| ------------- | --------------- | ----------------- | ---------------------------------------------------------------- |
-| `highpass`    | 80 Hz           | 100 Hz            | Corta zumbido de rede, trepidação de mesa e sopro                 |
-| `afftdn`      | `nr=18`         | `nr=28`           | Denoiser por FFT — é o que mata o chiado constante (`nf` medido)  |
-| `lowpass`     | —               | 9 kHz             | Acima disso, em reunião, quase só sobra chiado                    |
-| `deesser`     | —               | `i=0.4`           | Segura o "sss" estridente que o denoiser realça                   |
-| `dynaudnorm`  | ✓               | ✓ (mais firme)    | Nivela o volume de quem falou longe do microfone                  |
+| Nível     | Cadeia de filtros                                    |
+| --------- | ---------------------------------------------------- |
+| **Leve**  | `arnndn` com `mix=0.85` (mantém 15% do sinal original, o que mascara artefatos da rede) |
+| **Forte** | `arnndn` em mix cheio + `afftdn` leve para o chiado residual |
 
-A ordem importa: primeiro se tira o que claramente não é voz, depois o
-denoiser, e só no fim se normaliza o volume — normalizar antes só amplificaria
-o ruído.
+O **nivelamento de volume** (`dynaudnorm`) é uma opção separada, porque é outro
+problema: ele deixa audível quem falou longe do microfone, mas não reduz ruído.
 
-**Qual escolher?** Comece no **Leve**: ele resolve o caso comum (chiado de
-microfone, ar-condicionado) sem risco de estragar a voz. Use o **Forte** só em
-gravações realmente ruins — ele limita a faixa de frequências à da voz, o que
-limpa mais, mas pode deixar o som um pouco abafado ou metálico.
+### Medições
 
-Medições em áudio de teste (relação voz/chiado, quanto maior melhor):
+Teste objetivo com fala real (trecho de discurso do JFK, 16 kHz) misturada a
+ruído em níveis controlados. A métrica é SDR contra o áudio limpo de
+referência, com alinhamento de ganho e atraso — quanto maior, mais perto do
+original limpo. "Antiga" é a cadeia que este projeto usava antes (highpass +
+afftdn + dynaudnorm).
 
-| Gravação      | Sem limpeza | Leve       | Forte      |
-| ------------- | ----------- | ---------- | ---------- |
-| Bem ruidosa   | +1,1 dB     | **+7,0 dB** | +7,8 dB   |
-| Já limpa      | +27,1 dB    | **+40,9 dB** | +42,7 dB |
+| Cenário                | Sem tratar | Antiga | **Leve** | **Forte** |
+| ---------------------- | ---------- | ------ | -------- | --------- |
+| Chiado leve            | 15,1 dB    | −2,1   | **+1,8** | +0,9      |
+| Chiado forte           | 6,2 dB     | +2,1   | **+5,6** | +5,8      |
+| Chiado extremo         | 3,0 dB     | +0,9   | +5,6     | **+6,5**  |
+| Vozes ao fundo (leve)  | 15,1 dB    | −3,6   | **−1,3** | −2,2      |
+| Vozes ao fundo (forte) | 6,2 dB     | −0,5   | **+0,8** | +0,8      |
+| Áudio já limpo         | —          | 13,3   | **19,5** | 18,0      |
 
-O custo é baixo: numa gravação de 20 minutos, a conversão passou de 2,7 s para
-3,1 s (análise + filtros incluídos).
+Leitura dos números:
 
-> Se mesmo assim ficar ruidoso, o ganho maior costuma estar na origem: microfone
-> mais perto de quem fala e supressão de ruído ativada na própria ferramenta de
-> reunião (Meet/Teams/Zoom) na hora de gravar.
+- A cadeia antiga **piorava** o áudio em ruído leve e com vozes ao fundo. Por
+  isso ela foi substituída.
+- O **Leve** é o melhor equilíbrio: ganha em quase tudo e é o que menos
+  introduz artefato quando a gravação já estava boa (19,5 dB).
+- O **Forte** só compensa em gravação bem ruidosa.
+- **Vozes ao fundo (babble) continuam sendo o caso difícil** — nenhum dos dois
+  resolve. Isso é uma limitação conhecida do RNNoise, não um defeito da
+  configuração.
+
+### Prévia de 30 segundos
+
+Como testar a limpeza numa reunião de 1 h é caro, o botão **"Ouvir prévia de
+30s"** converte só um trecho do meio da gravação (numa reunião de 20 min isso
+levou 0,6 s) e abre no player. Ajuste as opções, ouça, e só então extraia o
+arquivo inteiro.
+
+> Se mesmo com a limpeza o áudio continuar ruim, o ganho maior está na origem:
+> microfone mais perto de quem fala e supressão de ruído ativada na própria
+> ferramenta de reunião (Meet/Teams/Zoom) na hora de gravar. Uma gravação
+> saturada ou com o áudio já degradado na origem não tem como ser recuperada
+> depois.
 
 ## Requisitos
 
@@ -124,6 +146,10 @@ O instalador `.exe` (NSIS, com escolha de pasta de instalação) aparece em
 binários do ffmpeg/ffprobe — eles precisam ficar fora do `app.asar` para serem
 executáveis, e o código já ajusta o caminho para `app.asar.unpacked`.
 
+O modelo da rede neural vai como `extraResources` (para `resources/rnnoise/`),
+fora do `app.asar`: o ffmpeg é um processo externo e não consegue ler de dentro
+do asar.
+
 > Para um ícone próprio, coloque um `icon.ico` (256×256) em `build/`;
 > o electron-builder o usa automaticamente.
 
@@ -133,7 +159,8 @@ executáveis, e o código já ajusta o caminho para `app.asar.unpacked`.
 src/
 ├─ main/                  # Main process (Node.js): arquivos, ffmpeg, IPC
 │  ├─ main.ts             # janela, handlers de IPC
-│  ├─ audio-extractor.ts  # ffprobe, análise de ruído, filtros e conversão
+│  ├─ audio-extractor.ts  # ffprobe, filtros de limpeza, prévia e conversão
+│  ├─ rnnoise.ts          # localiza o modelo .rnnn (dev e app empacotado)
 │  └─ ffmpeg-setup.ts     # resolve os binários empacotados (asar.unpacked)
 ├─ preload/
 │  └─ preload.ts          # contextBridge: a única ponte renderer ⇄ main
@@ -160,6 +187,11 @@ src/
   conversões longas.
 - **Caminho do arquivo arrastado via `webUtils.getPathForFile`** — é a forma
   suportada pelo Electron moderno com `contextIsolation` ligado.
+- **Escape do caminho do modelo no filtergraph** — o parser de filtros do
+  ffmpeg trata `\` como escape e `:` como separador, então um caminho do
+  Windows (`C:\Users\...`) quebra o filtro se for passado cru. Aspa simples no
+  caminho não tem escape possível (testado); nesse caso o modelo é copiado para
+  uma pasta sem aspas. É a falha clássica que só apareceria no app instalado.
 
 ## Roadmap / Próximas Fases
 
@@ -192,7 +224,8 @@ citação da reunião de origem.
 | "não possui nenhuma faixa de áudio"                   | A gravação foi feita sem áudio — não há o que extrair.                                            |
 | Progresso fica em 0% e a duração aparece "desconhecida" | Alguns arquivos (gravações interrompidas) não têm duração nos metadados; a conversão ainda funciona. |
 | Voz ficou abafada ou "metálica"                       | Você usou o nível Forte. Refaça no Leve — o arquivo antigo não é sobrescrito.                        |
-| Ainda tem chiado com a limpeza ligada                 | Tente o nível Forte. Ruído variável (obra, conversa ao fundo) é bem mais difícil que chiado constante. |
+| Ainda tem chiado com a limpeza ligada                 | Tente o nível Forte, usando a prévia para comparar. Vozes ao fundo o RNNoise não remove. |
+| "Modelo de redução de ruído não encontrado"           | O arquivo `assets/rnnoise/bd.rnnn` sumiu do projeto, ou o build não empacotou o `extraResources`. |
 | Erro do ffmpeg no app instalado                       | Confirme que o build manteve o `asarUnpack` do `package.json`.                                     |
 
 ## Licença

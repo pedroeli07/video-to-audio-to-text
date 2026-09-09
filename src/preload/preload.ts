@@ -33,6 +33,10 @@ const api = {
   extractAudio: (options: ExtractOptions): Promise<ExtractResult> =>
     ipcRenderer.invoke('extract:start', options),
 
+  /** Gera e abre uma prévia de 30 s com as opções atuais. */
+  previewAudio: (options: ExtractOptions): Promise<ExtractResult> =>
+    ipcRenderer.invoke('preview:start', options),
+
   /** Cancela a extração em andamento. */
   cancelExtraction: (): Promise<boolean> => ipcRenderer.invoke('extract:cancel'),
 

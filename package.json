@@ -49,13 +49,24 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
-    }
+    },
+    "extraResources": [
+      {
+        "from": "assets/rnnoise",
+        "to": "rnnoise",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
   }
 }

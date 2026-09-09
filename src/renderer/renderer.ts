@@ -61,6 +61,8 @@ const formatSelect = $<HTMLSelectElement>('format');
 const denoiseCheck = $<HTMLInputElement>('denoise');
 const denoiseLevel = $<HTMLSelectElement>('denoise-level');
 const denoiseHint = $<HTMLElement>('denoise-hint');
+const normalizeCheck = $<HTMLInputElement>('normalize');
+const btnPreview = $<HTMLButtonElement>('btn-preview');
 const outputDirText = $<HTMLElement>('output-dir-text');
 const btnChooseDir = $<HTMLButtonElement>('btn-choose-dir');
 const btnResetDir = $<HTMLButtonElement>('btn-reset-dir');
@@ -98,6 +100,7 @@ function renderVideoInfo(): void {
   if (!selectedVideo) {
     fileInfo.classList.add('hidden');
     btnExtract.disabled = true;
+    btnPreview.disabled = true;
     return;
   }
   infoName.textContent = selectedVideo.fileName;
@@ -105,16 +108,19 @@ function renderVideoInfo(): void {
   infoDuration.textContent = formatDuration(selectedVideo.durationSeconds);
   fileInfo.classList.remove('hidden');
   btnExtract.disabled = running;
+  btnPreview.disabled = running;
 }
 
 function setRunning(value: boolean): void {
   running = value;
   btnExtract.disabled = value || !selectedVideo;
+  btnPreview.disabled = value || !selectedVideo;
   btnCancel.classList.toggle('hidden', !value);
   dropzone.style.pointerEvents = value ? 'none' : '';
   formatSelect.disabled = value;
   denoiseCheck.disabled = value;
   denoiseLevel.disabled = value;
+  normalizeCheck.disabled = value;
   btnChooseDir.disabled = value;
 }
 
@@ -200,8 +206,8 @@ function renderDenoise(): void {
   if (!on) return;
   denoiseHint.textContent =
     denoiseLevel.value === 'forte'
-      ? 'Corta ruído agressivamente e limita a faixa da voz. Use quando o áudio está bem ruim — pode deixar a voz um pouco abafada.'
-      : 'Remove ruído de fundo constante (chiado, ar-condicionado) e nivela o volume de quem falou longe do microfone.';
+      ? 'Redução máxima, para gravação bem ruidosa. Deixa mais artefato se o áudio já era razoável — ouça a prévia antes.'
+      : 'Uma rede neural identifica a voz quadro a quadro e atenua só o resto (chiado, ventoinha, ar-condicionado). Funciona bem com ruído constante; vozes ao fundo ela quase não remove.';
 }
 
 denoiseCheck.addEventListener('change', renderDenoise);
@@ -226,20 +232,52 @@ btnResetDir.addEventListener('click', () => {
 
 // Progresso vindo do main
 api.onProgress((p: ExtractProgress) => {
-  if (p.phase === 'analyzing') {
-    // A análise não tem percentual; mostramos a barra indeterminada em 0.
-    progressBar.style.width = '0%';
-    progressText.textContent = 'Analisando o ruído do áudio…';
-    return;
-  }
   progressBar.style.width = `${p.percent.toFixed(1)}%`;
   const done = formatDuration(p.processedSeconds);
   const total = formatDuration(p.totalSeconds);
-  // Com filtros de limpeza a conversão fica mais lenta; o progresso é o mesmo.
+  // Com a limpeza ligada a conversão fica mais lenta; o progresso é o mesmo.
   progressText.textContent =
     p.totalSeconds > 0
       ? `Processando… ${p.percent.toFixed(1)}% (${done} de ${total})`
       : `Processando… ${p.percent.toFixed(1)}%`;
+});
+
+/** Opções escolhidas na tela, usadas tanto pela prévia quanto pela extração. */
+function currentOptions() {
+  return {
+    inputPath: selectedVideo!.path,
+    format: formatSelect.value as 'mp3' | 'wav',
+    denoise: denoiseCheck.checked
+      ? (denoiseLevel.value as 'leve' | 'forte')
+      : ('off' as const),
+    normalize: normalizeCheck.checked,
+    outputDir: customOutputDir ?? undefined,
+  };
+}
+
+// Prévia: converte 30 s do meio da gravação e abre no player padrão.
+btnPreview.addEventListener('click', async () => {
+  if (!selectedVideo || running) return;
+
+  clearStatus();
+  setRunning(true);
+  progressBox.classList.remove('hidden');
+  progressBar.style.width = '0%';
+  progressText.textContent = 'Gerando prévia de 30s…';
+
+  const result = await api.previewAudio(currentOptions());
+
+  setRunning(false);
+  progressBox.classList.add('hidden');
+
+  if (result.ok) {
+    showStatus(
+      `Prévia aberta no player. Se ficou bom, é só clicar em "Extrair Áudio".\n${result.outputPath}`,
+      'info'
+    );
+  } else {
+    showStatus(result.error, 'error');
+  }
 });
 
 // Extração
@@ -253,14 +291,7 @@ btnExtract.addEventListener('click', async () => {
   progressBar.style.width = '0%';
   progressText.textContent = 'Iniciando…';
 
-  const result = await api.extractAudio({
-    inputPath: selectedVideo.path,
-    format: formatSelect.value as 'mp3' | 'wav',
-    denoise: denoiseCheck.checked
-      ? (denoiseLevel.value as 'leve' | 'forte')
-      : 'off',
-    outputDir: customOutputDir ?? undefined,
-  });
+  const result = await api.extractAudio(currentOptions());
 
   setRunning(false);
   progressBox.classList.add('hidden');

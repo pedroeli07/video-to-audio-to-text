@@ -7,13 +7,12 @@
 export type AudioFormat = 'mp3' | 'wav';
 
 /**
- * Nível de limpeza de ruído aplicado durante a extração.
+ * Nível de limpeza de ruído (RNNoise, rede neural treinada para voz).
  * - 'off':   nenhum filtro, áudio igual ao do vídeo.
- * - 'leve':  corta ruído de fundo constante (ar-condicionado, ventoinha, chiado
- *            de microfone) e nivela o volume. Seguro para qualquer gravação.
- * - 'forte': mais agressivo — além do acima, limita a banda à faixa da voz e
- *            reduz sibilância. Melhor para gravações bem ruins, mas pode deixar
- *            a voz com som "abafado"/metálico.
+ * - 'leve':  reduz ruído mantendo 15% do sinal original. Melhor resultado
+ *            médio nos testes, inclusive em gravação que já estava boa.
+ * - 'forte': redução cheia + varredura do chiado residual. Para gravação
+ *            bem ruidosa; deixa mais artefato se o áudio já era razoável.
  */
 export type DenoiseLevel = 'off' | 'leve' | 'forte';
 
@@ -26,6 +25,11 @@ export interface ExtractOptions {
   /** Limpeza de ruído. Padrão da UI: 'off'. */
   denoise: DenoiseLevel;
   /**
+   * Nivela o volume ao longo da gravação (dynaudnorm), para quem falou longe
+   * do microfone ficar audível. Independente da limpeza de ruído.
+   */
+  normalize: boolean;
+  /**
    * Pasta de saída. Se ficar vazio/undefined, o áudio é salvo
    * na mesma pasta do vídeo original.
    */
@@ -34,11 +38,6 @@ export interface ExtractOptions {
 
 /** Progresso emitido durante a conversão (main -> renderer). */
 export interface ExtractProgress {
-  /**
-   * Etapa atual. Com limpeza de ruído ligada há uma passada rápida de
-   * análise antes da conversão; a UI avisa para o usuário não achar que travou.
-   */
-  phase: 'analyzing' | 'converting';
   /** 0 a 100. Calculado a partir da duração total do vídeo. */
   percent: number;
   /** Segundos de vídeo já processados. */

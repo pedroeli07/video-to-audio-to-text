@@ -4,12 +4,14 @@
  */
 import path from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import os from 'node:os';
 import {
   probeVideo,
   startExtraction,
   VIDEO_EXTENSIONS,
   type ExtractionJob,
 } from './audio-extractor';
+import { resolveModelPath } from './rnnoise';
 import type {
   ExtractOptions,
   ExtractResult,
@@ -108,7 +110,17 @@ ipcMain.handle(
       return { ok: false, error: 'Já existe uma extração em andamento.' };
     }
 
-    const job = startExtraction(options, (progress) => {
+    // O modelo do RNNoise só é necessário quando há limpeza ligada.
+    let modelPath: string | undefined;
+    if (options.denoise !== 'off') {
+      try {
+        modelPath = resolveModelPath();
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
+    const job = startExtraction({ ...options, modelPath }, (progress) => {
       // sender pode ter sido destruído se a janela fechou no meio.
       if (!event.sender.isDestroyed()) {
         event.sender.send('extract:progress', progress);
@@ -125,6 +137,64 @@ ipcMain.handle(
         return { ok: false, error: 'Extração cancelada.' };
       }
       return { ok: false, error: message };
+    } finally {
+      currentJob = null;
+    }
+  }
+);
+
+/**
+ * Gera uma prévia curta (trecho do meio da gravação) com as opções atuais e
+ * abre no player padrão. Serve para testar a limpeza sem processar o vídeo
+ * inteiro — numa reunião de 1 h isso é a diferença entre 5 segundos e minutos.
+ */
+const PREVIEW_SECONDS = 30;
+
+ipcMain.handle(
+  'preview:start',
+  async (_event, options: ExtractOptions): Promise<ExtractResult> => {
+    if (currentJob) {
+      return { ok: false, error: 'Aguarde a extração em andamento terminar.' };
+    }
+
+    let modelPath: string | undefined;
+    if (options.denoise !== 'off') {
+      try {
+        modelPath = resolveModelPath();
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
+    try {
+      const info = await probeVideo(options.inputPath);
+      // Pega o meio da reunião: o começo costuma ser só gente entrando na sala.
+      const start = Math.max(
+        0,
+        Math.floor(info.durationSeconds / 2 - PREVIEW_SECONDS / 2)
+      );
+
+      const job = startExtraction(
+        {
+          ...options,
+          modelPath,
+          // A prévia vai para a pasta temporária: é descartável.
+          outputDir: path.join(os.tmpdir(), 'video-to-audio-previas'),
+          preview: { startSeconds: start, durationSeconds: PREVIEW_SECONDS },
+        },
+        () => undefined
+      );
+      currentJob = job;
+
+      const { outputPath, durationSeconds } = await job.promise;
+      await shell.openPath(outputPath);
+      return { ok: true, outputPath, durationSeconds };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        error: message === 'CANCELED' ? 'Prévia cancelada.' : message,
+      };
     } finally {
       currentJob = null;
     }
