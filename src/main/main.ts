@@ -6,21 +6,29 @@ import path from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import os from 'node:os';
 import {
+  AUDIO_EXTENSIONS,
   probeVideo,
   startExtraction,
   VIDEO_EXTENSIONS,
   type ExtractionJob,
 } from './audio-extractor';
 import { resolveModelPath } from './rnnoise';
+import { startTranscription, type TranscriptionJob } from './transcriber';
+import { apiKeyStatus, clearApiKey, loadApiKey, saveApiKey } from './api-key';
 import type {
+  ApiKeyStatus,
   ExtractOptions,
   ExtractResult,
+  TranscribeOptions,
+  TranscribeResult,
   VideoInfo,
 } from '../shared/types';
 
 let mainWindow: BrowserWindow | null = null;
 /** Só permitimos uma extração por vez — simplifica a UI e o cancelamento. */
 let currentJob: ExtractionJob | null = null;
+/** Idem para a transcrição, que é independente da extração. */
+let currentTranscription: TranscriptionJob | null = null;
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -56,8 +64,9 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  // Cancela conversão pendente antes de sair.
+  // Cancela trabalho pendente antes de sair.
   currentJob?.cancel();
+  currentTranscription?.cancel();
   if (process.platform !== 'darwin') app.quit();
 });
 
@@ -217,3 +226,88 @@ ipcMain.handle('shell:showInFolder', (_event, filePath: string): void => {
 ipcMain.handle('shell:openFile', async (_event, filePath: string): Promise<string> =>
   shell.openPath(filePath)
 );
+
+/* ------------------------------------------------------------------ */
+/* Transcrição (Fase 2)                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Seleciona um áudio já extraído. Existe para dar para transcrever de novo
+ * numa sessão futura sem ter que reprocessar o vídeo de 1 h só para comparar
+ * os dois modelos.
+ */
+ipcMain.handle('dialog:selectAudio', async (): Promise<string | null> => {
+  if (!mainWindow) return null;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Selecione o áudio para transcrever',
+    properties: ['openFile'],
+    filters: [
+      { name: 'Áudio', extensions: AUDIO_EXTENSIONS },
+      { name: 'Todos os arquivos', extensions: ['*'] },
+    ],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  return result.filePaths[0];
+});
+
+ipcMain.handle('transcribe:keyStatus', (): ApiKeyStatus => apiKeyStatus());
+
+ipcMain.handle('transcribe:saveKey', (_event, key: string): ApiKeyStatus => {
+  saveApiKey(key);
+  return apiKeyStatus();
+});
+
+ipcMain.handle('transcribe:clearKey', (): ApiKeyStatus => {
+  clearApiKey();
+  return apiKeyStatus();
+});
+
+/**
+ * Transcreve um áudio já extraído. O progresso volta por
+ * 'transcribe:progress'; o resultado, como retorno do invoke.
+ */
+ipcMain.handle(
+  'transcribe:start',
+  async (event, options: TranscribeOptions): Promise<TranscribeResult> => {
+    if (currentTranscription) {
+      return { ok: false, error: 'Já existe uma transcrição em andamento.' };
+    }
+
+    const apiKey = loadApiKey();
+    if (!apiKey) {
+      return {
+        ok: false,
+        error:
+          'Nenhuma chave da API salva. Cole sua chave da AssemblyAI no campo ' +
+          'acima e clique em salvar. O README explica como obter uma.',
+      };
+    }
+
+    const job = startTranscription(options, apiKey, (progress) => {
+      if (!event.sender.isDestroyed()) {
+        event.sender.send('transcribe:progress', progress);
+      }
+    });
+    currentTranscription = job;
+
+    try {
+      const { outputPath, speakerCount } = await job.promise;
+      return { ok: true, outputPath, speakerCount, model: options.model };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message === 'CANCELED') {
+        return { ok: false, error: 'Transcrição cancelada.' };
+      }
+      return { ok: false, error: message };
+    } finally {
+      currentTranscription = null;
+    }
+  }
+);
+
+/** Cancela a transcrição em andamento (se houver). */
+ipcMain.handle('transcribe:cancel', (): boolean => {
+  if (!currentTranscription) return false;
+  currentTranscription.cancel();
+  return true;
+});

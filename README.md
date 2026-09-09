@@ -1,12 +1,20 @@
 # Video To Audio
 
-App desktop **local** (Electron + TypeScript) para extrair o áudio de gravações
-de reuniões. Nenhum arquivo sai da sua máquina: não há upload, não há serviço
-externo, não há limite de tamanho — o processamento é feito pelo `ffmpeg` que
-vem empacotado junto com o app.
+App desktop (Electron + TypeScript) para extrair o áudio de gravações de
+reuniões e, opcionalmente, transcrevê-lo em texto separando quem falou.
 
-Esta é a **Fase 1** de um projeto maior (vídeo → áudio → texto → estudo com IA).
-Veja o [Roadmap](#roadmap--próximas-fases).
+**A extração e a limpeza de áudio são 100% locais**: sem upload, sem serviço
+externo, sem limite de tamanho — quem faz o trabalho é o `ffmpeg` empacotado
+junto com o app.
+
+**A transcrição é a única parte que usa a internet.** Ela é opcional, desligada
+por padrão, e só acontece quando você clica em "Transcrever": aí o áudio é
+enviado para a [AssemblyAI](https://www.assemblyai.com). Veja
+[Transcrição](#transcrição-com-separação-de-locutores).
+
+Isto cobre a **Fase 1** (áudio) e a **Fase 2** (texto) de um projeto maior
+(vídeo → áudio → texto → estudo com IA). Veja o
+[Roadmap](#roadmap--próximas-fases).
 
 ## Por que existe
 
@@ -39,6 +47,18 @@ problemas: roda offline e não tem limite prático de tamanho ou duração.
 
 A UI **nunca trava**: o ffmpeg roda como processo filho no main process, e o
 renderer só recebe eventos de progresso.
+
+## Funcionalidades (Fase 2)
+
+- **Transcrição em texto com separação de quem falou** (`Pessoa 1:`, `Pessoa 2:`),
+  com marcação de tempo em cada fala.
+- **Escolha entre dois modelos** (Universal-2 e Universal-3.5 Pro) para
+  transcrever a mesma reunião nos dois e comparar antes de decidir qual usar.
+- **Chave da API cifrada pelo cofre do Windows**, nunca em texto puro.
+- **Transcrever um áudio já extraído**, sem precisar reprocessar o vídeo.
+- **Cancelar** uma transcrição em andamento (inclusive durante o upload).
+
+Detalhes, preços e como obter a chave: [Transcrição](#transcrição-com-separação-de-locutores).
 
 ## Como funciona a redução de ruído
 
@@ -103,6 +123,96 @@ arquivo inteiro.
 > saturada ou com o áudio já degradado na origem não tem como ser recuperada
 > depois.
 
+## Transcrição com separação de locutores
+
+O card **"Transcrição (opcional)"**, no fim da tela, converte o áudio extraído
+em um arquivo `.txt` já separando quem falou:
+
+```
+Transcrição de: reuniao.mp3
+Modelo: Universal-2
+Locutores identificados: 3
+Gerado em: 09/09/2026, 14:30:00
+------------------------------------------------------------
+
+[00:00:12] Pessoa 1: Hoje nós iremos apresentar a conciliação.
+
+[00:00:16] Pessoa 2: Perfeito, pode seguir.
+
+[00:00:18] Pessoa 1: O risco sacado ficou em aberto.
+```
+
+Os rótulos seguem a **ordem de entrada na conversa** — "Pessoa 1" é sempre quem
+falou primeiro. Eles são anônimos por natureza: a diarização agrupa vozes, ela
+não sabe nomes. Trocar "Pessoa 1" por "Pedro" é edição manual no `.txt`.
+
+> ⚠️ **Esta é a única parte do app que envia dados para fora da sua máquina.**
+> O áudio vai para os servidores da AssemblyAI. Para reuniões sensíveis, pense
+> se isso é aceitável antes de clicar em Transcrever.
+
+### Os dois modelos
+
+Dá para escolher entre dois modelos, os dois com português e diarização. Eles
+existem lado a lado justamente para você transcrever a mesma reunião nos dois e
+decidir se o mais caro compensa:
+
+| Modelo | Transcrição | Diarização | Total por hora de áudio |
+| ------ | ----------- | ---------- | ----------------------- |
+| **Universal-2** | US$ 0,15 | +US$ 0,02 | **US$ 0,17** (~R$ 0,87) |
+| **Universal-3.5 Pro** | US$ 0,21 | +US$ 0,02 | **US$ 0,23** (~R$ 1,17) |
+
+O `.txt` sai com o nome do modelo no final (`reuniao - universal-2.txt`,
+`reuniao - universal-3-5-pro.txt`), então os dois ficam lado a lado na mesma
+pasta para comparar. Nada é sobrescrito: repetir o mesmo modelo gera `(1)`, `(2)`…
+
+Como o app pede **um modelo só** por vez (sem a lista de fallback da API), o
+arquivo sempre reflete o modelo que você escolheu — do contrário a comparação
+não significaria nada.
+
+### Como criar a conta e pegar a API key
+
+1. Acesse **<https://www.assemblyai.com>** e clique em **Sign up**. Dá para
+   entrar com e-mail, Google ou GitHub.
+2. Confirme o e-mail, se for pedido.
+3. Você cai no painel em **<https://www.assemblyai.com/dashboard/home>**. A
+   **API key** aparece logo na página inicial do painel — é uma sequência
+   longa de letras e números. Clique para copiar.
+   (Se não achar, o passo a passo oficial está
+   [neste artigo de suporte](https://support.assemblyai.com/articles/7562135267-how-to-get-your-api-key).)
+4. No app, cole a chave no campo **"Chave da API"** e clique em **salvar**.
+
+**Não é preciso cadastrar cartão de crédito.** A conta nova vem com **US$ 50 de
+crédito grátis**, o que dá cerca de **290 horas** de reunião no Universal-2 com
+diarização — ou seja, a comparação entre os dois modelos sai de graça, com folga.
+Quando o crédito acaba a conta simplesmente para de transcrever até você
+adicionar um cartão; não há cobrança automática de surpresa.
+
+### Onde a chave fica guardada
+
+A chave é cifrada pelo **cofre de credenciais do sistema operacional** (DPAPI no
+Windows) através do `safeStorage` do Electron, e gravada em
+`%APPDATA%/video-to-audio-to-text/assemblyai.key`. Ela fica amarrada à sua conta
+de usuário do Windows: copiar esse arquivo para outra máquina não serve de nada.
+
+Um `.env` ou um JSON em texto puro deixaria a credencial legível para qualquer
+processo do usuário, o que é inaceitável para uma chave que gera custo por uso.
+O botão **remover** apaga a chave do computador.
+
+A chave nunca chega ao renderer: quem fala com a API é o main process, então a
+CSP restritiva da interface continua valendo (`default-src 'none'`).
+
+### Dicas de qualidade
+
+- **Transcreva o áudio SEM limpeza de ruído.** Parece contraintuitivo, mas o
+  RNNoise introduz artefato (veja as [medições](#medições)), e artefato atrapalha
+  o modelo de voz que faz a diarização. A limpeza é para o ouvido humano; o
+  modelo prefere o áudio cru. Se a gravação for muito ruidosa, use o nível
+  **Leve**, nunca o Forte.
+- **MP3 sobe mais rápido.** Uma hora em WAV 16 kHz dá ~115 MB; em MP3, ~57 MB.
+  A qualidade da transcrição é praticamente a mesma.
+- **Fala sobreposta é o caso difícil.** Gravação de Meet vem em um canal só. Com
+  as pessoas se revezando, a separação acerta bem; quando falam por cima, erra.
+
 ## Requisitos
 
 - [Node.js](https://nodejs.org/) 18 ou superior (inclui o `npm`).
@@ -161,7 +271,9 @@ src/
 │  ├─ main.ts             # janela, handlers de IPC
 │  ├─ audio-extractor.ts  # ffprobe, filtros de limpeza, prévia e conversão
 │  ├─ rnnoise.ts          # localiza o modelo .rnnn (dev e app empacotado)
-│  └─ ffmpeg-setup.ts     # resolve os binários empacotados (asar.unpacked)
+│  ├─ ffmpeg-setup.ts     # resolve os binários empacotados (asar.unpacked)
+│  ├─ transcriber.ts      # cliente da AssemblyAI (upload, diarização, .txt)
+│  └─ api-key.ts          # chave da API cifrada pelo cofre do sistema
 ├─ preload/
 │  └─ preload.ts          # contextBridge: a única ponte renderer ⇄ main
 ├─ renderer/              # Interface (HTML/CSS/TS puro, sem framework)
@@ -187,22 +299,42 @@ src/
   conversões longas.
 - **Caminho do arquivo arrastado via `webUtils.getPathForFile`** — é a forma
   suportada pelo Electron moderno com `contextIsolation` ligado.
-- **Escape do caminho do modelo no filtergraph** — o parser de filtros do
-  ffmpeg trata `\` como escape e `:` como separador, então um caminho do
-  Windows (`C:\Users\...`) quebra o filtro se for passado cru. Aspa simples no
-  caminho não tem escape possível (testado); nesse caso o modelo é copiado para
-  uma pasta sem aspas. É a falha clássica que só apareceria no app instalado.
+- **Escape do caminho do modelo no filtergraph** — o valor passa por **dois**
+  unescapes do ffmpeg (o do filtergraph e o da opção do filtro). Por isso as
+  barras do Windows viram `/` (escapá-las não adianta: `C:\video` chega como
+  `C:video`) e o `:` leva **duas** barras invertidas. Os caracteres `'`, `,`,
+  `;`, `[` e `]` não sobrevivem a nenhuma forma de escape (testado contra o
+  ffmpeg); se o caminho de instalação tiver algum deles, o modelo é copiado
+  para uma pasta com nome seguro. É a falha clássica que só aparece no app
+  instalado.
+- **A API de transcrição é chamada do main process, nunca do renderer** — a
+  chave nunca cruza a ponte do IPC, e a CSP `default-src 'none'` da interface
+  continua valendo. O renderer só manda "transcreva este caminho com este
+  modelo" e recebe progresso de volta.
+- **Um modelo por requisição, sem a lista de fallback da API** — o campo
+  `speech_models` aceita vários modelos em ordem de preferência, mas com
+  fallback ligado a API poderia trocar de modelo sem avisar e a comparação
+  entre os dois perderia o sentido.
 
 ## Roadmap / Próximas Fases
 
-> Nada abaixo está implementado. É o planejamento do projeto.
+### Fase 2 — Transcrição do áudio para texto ✅ implementada (via API)
+Feita com a **AssemblyAI**, com diarização. Veja
+[Transcrição](#transcrição-com-separação-de-locutores).
 
-### Fase 2 — Transcrição do áudio para texto
-Converter o áudio extraído em texto usando speech-to-text. A definir entre uma
-solução **local** (ex.: `whisper.cpp` / `faster-whisper`, que mantém o conteúdo
-das reuniões na máquina) ou **via API**. Prioridade para a opção local, pelo
-mesmo motivo de confidencialidade que motivou a Fase 1. É por isso que o WAV
-16 kHz mono já é uma opção de saída aqui.
+A escolha foi por API, e não pela opção local que estava planejada, porque a
+parte difícil não é transcrever — é **separar os locutores**. O Whisper não faz
+isso sozinho; a rota local exigiria somar um diarizador (`sherpa-onnx`, ou
+`pyannote` com Python + PyTorch embarcado), com resultado pior em fala
+sobreposta e mais lento em CPU.
+
+**A opção local continua no radar**, pelo motivo de confidencialidade que
+motivou a Fase 1. O desenho já prevê isso: toda a conversa com a API está
+isolada em `src/main/transcriber.ts`, atrás da mesma forma de job
+(`promise` + `cancel`) que a extração usa. Um motor local entra como uma segunda
+implementação, sem mexer na UI nem no IPC.
+
+> Nada abaixo desta linha está implementado. É o planejamento do projeto.
 
 ### Fase 3 — Armazenamento das transcrições
 Guardar as transcrições em banco de dados, com metadados por reunião (data,
@@ -227,6 +359,12 @@ citação da reunião de origem.
 | Ainda tem chiado com a limpeza ligada                 | Tente o nível Forte, usando a prévia para comparar. Vozes ao fundo o RNNoise não remove. |
 | "Modelo de redução de ruído não encontrado"           | O arquivo `assets/rnnoise/bd.rnnn` sumiu do projeto, ou o build não empacotou o `extraResources`. |
 | Erro do ffmpeg no app instalado                       | Confirme que o build manteve o `asarUnpack` do `package.json`.                                     |
+| "Chave da API recusada (401)"                         | A chave está incompleta ou foi trocada no painel. Copie de novo em [dashboard/home](https://www.assemblyai.com/dashboard/home) e salve. |
+| "Nenhuma chave da API salva"                          | Cole a chave no campo da seção Transcrição e clique em **salvar**. Veja [como obter](#como-criar-a-conta-e-pegar-a-api-key). |
+| Transcrição falha citando créditos / cobrança         | Os US$ 50 gratuitos acabaram. Adicione um cartão no painel da AssemblyAI para continuar.           |
+| "A API não encontrou fala nenhuma neste áudio"        | O áudio saiu mudo. Ouça a prévia antes de transcrever — pode ser gravação sem faixa de voz.        |
+| Locutores trocados ou juntados numa "Pessoa" só       | Transcreva a partir do áudio **sem** limpeza de ruído: o artefato do RNNoise atrapalha a separação de vozes. Fala sobreposta também piora o resultado. |
+| A chave sumiu depois de trocar de usuário do Windows  | Ela é cifrada pelo cofre da conta de usuário. Cole a chave de novo nesta conta.                    |
 
 ## Licença
 
