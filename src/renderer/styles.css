@@ -1,0 +1,111 @@
+:root {
+  --bg: #14161a;
+  --card: #1d2026;
+  --border: #2c313a;
+  --text: #e8eaed;
+  --muted: #9aa3af;
+  --accent: #4c8dff;
+  --danger: #ff6b6b;
+  --ok: #4ade80;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 system-ui, "Segoe UI", Roboto, sans-serif;
+}
+
+.app {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 28px 24px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+h1 { margin: 0 0 4px; font-size: 22px; }
+.subtitle { margin: 0; color: var(--muted); }
+
+.hidden { display: none !important; }
+
+/* Área de arrastar e soltar */
+.dropzone {
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  padding: 36px 16px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.dropzone:hover,
+.dropzone:focus-visible,
+.dropzone.dragover {
+  border-color: var(--accent);
+  background: rgba(76, 141, 255, .08);
+  outline: none;
+}
+.dropzone-title { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
+.dropzone-hint { margin: 0; color: var(--muted); }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.row { display: flex; gap: 12px; align-items: center; }
+.label { width: 130px; flex: none; color: var(--muted); }
+.value { flex: 1; word-break: break-all; }
+
+select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.output-dir { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+button {
+  font: inherit;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  padding: 9px 16px;
+}
+button:disabled { opacity: .5; cursor: not-allowed; }
+
+.primary { background: var(--accent); border-color: var(--accent); color: #0b1220; font-weight: 600; }
+.secondary { background: transparent; color: var(--text); }
+.link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.actions { display: flex; gap: 10px; }
+
+.progress-track {
+  height: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progress-bar { height: 100%; width: 0; background: var(--accent); transition: width .2s linear; }
+
+.status { margin: 0; white-space: pre-wrap; }
+.status.error { color: var(--danger); }
+.status.success { color: var(--ok); }

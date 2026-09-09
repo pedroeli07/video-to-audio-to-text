@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <!-- CSP restritiva: nada de código remoto, nada de eval. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;"
+    />
+    <title>Video To Audio</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header>
+        <h1>Video &rarr; Áudio</h1>
+        <p class="subtitle">
+          Extração local de áudio de gravações de reunião. Nada é enviado para a
+          internet.
+        </p>
+      </header>
+
+      <!-- 1. Seleção do vídeo (clique ou arrastar e soltar) -->
+      <section id="dropzone" class="dropzone" tabindex="0">
+        <p class="dropzone-title">Arraste um vídeo aqui</p>
+        <p class="dropzone-hint">ou clique para escolher um arquivo</p>
+      </section>
+
+      <section id="file-info" class="card hidden">
+        <div class="row">
+          <span class="label">Arquivo</span>
+          <span id="info-name" class="value"></span>
+        </div>
+        <div class="row">
+          <span class="label">Tamanho</span>
+          <span id="info-size" class="value"></span>
+        </div>
+        <div class="row">
+          <span class="label">Duração</span>
+          <span id="info-duration" class="value"></span>
+        </div>
+      </section>
+
+      <!-- 2. Opções -->
+      <section class="card">
+        <div class="row">
+          <label class="label" for="format">Formato</label>
+          <select id="format" class="value">
+            <option value="mp3" selected>MP3 (menor, recomendado)</option>
+            <option value="wav">WAV 16 kHz (sem perdas, ideal p/ transcrição)</option>
+          </select>
+        </div>
+        <div class="row">
+          <span class="label">Pasta de saída</span>
+          <span class="value output-dir">
+            <span id="output-dir-text">Mesma pasta do vídeo</span>
+            <button id="btn-choose-dir" class="link">alterar</button>
+            <button id="btn-reset-dir" class="link hidden">usar a do vídeo</button>
+          </span>
+        </div>
+      </section>
+
+      <!-- 3. Ação + progresso -->
+      <section class="actions">
+        <button id="btn-extract" class="primary" disabled>Extrair Áudio</button>
+        <button id="btn-cancel" class="secondary hidden">Cancelar</button>
+      </section>
+
+      <section id="progress-box" class="card hidden">
+        <div class="progress-track">
+          <div id="progress-bar" class="progress-bar"></div>
+        </div>
+        <p id="progress-text" class="status">Processando…</p>
+      </section>
+
+      <section id="status-box" class="card hidden">
+        <p id="status-text" class="status"></p>
+        <div id="result-actions" class="actions hidden">
+          <button id="btn-open-folder" class="secondary">Abrir pasta</button>
+          <button id="btn-open-file" class="secondary">Abrir áudio</button>
+        </div>
+      </section>
+    </main>
+
+    <script src="renderer.js"></script>
+  </body>
+</html>
