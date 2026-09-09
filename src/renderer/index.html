@@ -15,8 +15,8 @@
       <header>
         <h1>Video &rarr; Áudio</h1>
         <p class="subtitle">
-          Extração local de áudio de gravações de reunião. Nada é enviado para a
-          internet.
+          Extração local de áudio de gravações de reunião. A transcrição, no
+          fim da página, é opcional e é a única parte que usa a internet.
         </p>
       </header>
 
@@ -102,6 +102,78 @@
         <div id="result-actions" class="actions hidden">
           <button id="btn-open-folder" class="secondary">Abrir pasta</button>
           <button id="btn-open-file" class="secondary">Abrir áudio</button>
+        </div>
+      </section>
+
+      <!-- 4. Transcrição em texto, com separação de quem falou -->
+      <section class="card">
+        <h2 class="section-title">Transcrição (opcional)</h2>
+
+        <div class="row">
+          <span class="label">Áudio</span>
+          <span class="value output-dir">
+            <span id="transcribe-target">extraia um áudio acima</span>
+            <button id="btn-choose-audio" class="link">escolher outro…</button>
+          </span>
+        </div>
+
+        <div class="row">
+          <span class="label">Modelo</span>
+          <span class="value models">
+            <label class="check">
+              <input type="radio" name="stt-model" value="universal-2" checked />
+              Universal-2 &mdash; US$ 0,17/h
+            </label>
+            <label class="check">
+              <input type="radio" name="stt-model" value="universal-3-5-pro" />
+              Universal-3.5 Pro &mdash; US$ 0,23/h
+            </label>
+          </span>
+        </div>
+        <p class="hint">
+          Para comparar, transcreva o mesmo áudio nos dois: o .txt sai com o
+          nome do modelo no final, então os dois arquivos ficam lado a lado.
+        </p>
+
+        <div class="row">
+          <label class="label" for="api-key">Chave da API</label>
+          <span class="value apikey">
+            <input
+              type="password"
+              id="api-key"
+              placeholder="cole aqui a chave da AssemblyAI"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <button id="btn-save-key" class="link">salvar</button>
+            <button id="btn-clear-key" class="link hidden">remover</button>
+          </span>
+        </div>
+        <p id="key-status" class="hint"></p>
+
+        <p class="hint warn">
+          A transcrição envia o áudio para os servidores da AssemblyAI e é
+          cobrada por hora. Extração e limpeza de ruído continuam 100% locais.
+        </p>
+
+        <div class="actions">
+          <button id="btn-transcribe" class="primary" disabled>Transcrever</button>
+          <button id="btn-cancel-transcribe" class="secondary hidden">Cancelar</button>
+        </div>
+      </section>
+
+      <section id="transcribe-progress-box" class="card hidden">
+        <div class="progress-track">
+          <div id="transcribe-bar" class="progress-bar"></div>
+        </div>
+        <p id="transcribe-progress-text" class="status"></p>
+      </section>
+
+      <section id="transcribe-status-box" class="card hidden">
+        <p id="transcribe-status-text" class="status"></p>
+        <div id="transcribe-actions" class="actions hidden">
+          <button id="btn-open-transcript" class="secondary">Abrir transcrição</button>
+          <button id="btn-transcript-folder" class="secondary">Abrir pasta</button>
         </div>
       </section>
     </main>

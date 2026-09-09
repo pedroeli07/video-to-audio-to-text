@@ -8,6 +8,8 @@
  */
 type VideoInfo = import('../shared/types').VideoInfo;
 type ExtractProgress = import('../shared/types').ExtractProgress;
+type TranscribeProgress = import('../shared/types').TranscribeProgress;
+type TranscriptionModel = import('../shared/types').TranscriptionModel;
 type PreloadApi = import('../preload/preload').PreloadApi;
 
 declare const api: PreloadApi;
@@ -300,6 +302,8 @@ btnExtract.addEventListener('click', async () => {
     lastOutputPath = result.outputPath;
     showStatus(`Áudio salvo em:\n${result.outputPath}`, 'success');
     resultActions.classList.remove('hidden');
+    // O áudio recém-gerado vira o alvo da transcrição, sem o usuário reescolher.
+    setTranscribeTarget(result.outputPath);
   } else {
     showStatus(result.error, 'error');
   }
@@ -317,4 +321,169 @@ btnOpenFile.addEventListener('click', async () => {
   if (!lastOutputPath) return;
   const error = await api.openFile(lastOutputPath);
   if (error) showStatus(`Não foi possível abrir o arquivo: ${error}`, 'error');
+});
+
+/* ---------------------------------------------------------------- */
+/* Transcrição                                                       */
+/* ---------------------------------------------------------------- */
+
+const transcribeTarget = $<HTMLElement>('transcribe-target');
+const btnChooseAudio = $<HTMLButtonElement>('btn-choose-audio');
+const apiKeyInput = $<HTMLInputElement>('api-key');
+const btnSaveKey = $<HTMLButtonElement>('btn-save-key');
+const btnClearKey = $<HTMLButtonElement>('btn-clear-key');
+const keyStatus = $<HTMLElement>('key-status');
+const btnTranscribe = $<HTMLButtonElement>('btn-transcribe');
+const btnCancelTranscribe = $<HTMLButtonElement>('btn-cancel-transcribe');
+const transcribeProgressBox = $<HTMLElement>('transcribe-progress-box');
+const transcribeBar = $<HTMLElement>('transcribe-bar');
+const transcribeProgressText = $<HTMLElement>('transcribe-progress-text');
+const transcribeStatusBox = $<HTMLElement>('transcribe-status-box');
+const transcribeStatusText = $<HTMLElement>('transcribe-status-text');
+const transcribeActions = $<HTMLElement>('transcribe-actions');
+const btnOpenTranscript = $<HTMLButtonElement>('btn-open-transcript');
+const btnTranscriptFolder = $<HTMLButtonElement>('btn-transcript-folder');
+
+/** Áudio que será transcrito: o último extraído, ou um escolhido à mão. */
+let transcribeAudioPath: string | null = null;
+/** Caminho do último .txt gerado, para os botões "Abrir…". */
+let lastTranscriptPath: string | null = null;
+let transcribing = false;
+
+function fileNameOf(filePath: string): string {
+  return filePath.split(/[\\/]/).pop() ?? filePath;
+}
+
+function setTranscribeTarget(filePath: string | null): void {
+  transcribeAudioPath = filePath;
+  transcribeTarget.textContent = filePath
+    ? fileNameOf(filePath)
+    : 'extraia um áudio acima';
+  btnTranscribe.disabled = transcribing || !filePath;
+}
+
+function showTranscribeStatus(
+  message: string,
+  kind: 'error' | 'success' | 'info'
+): void {
+  transcribeStatusBox.classList.remove('hidden');
+  transcribeStatusText.textContent = message;
+  transcribeStatusText.className = `status ${kind === 'info' ? '' : kind}`.trim();
+}
+
+function setTranscribing(value: boolean): void {
+  transcribing = value;
+  btnTranscribe.disabled = value || !transcribeAudioPath;
+  btnCancelTranscribe.classList.toggle('hidden', !value);
+  btnChooseAudio.disabled = value;
+  btnSaveKey.disabled = value;
+  btnClearKey.disabled = value;
+  apiKeyInput.disabled = value;
+  document
+    .querySelectorAll<HTMLInputElement>('input[name="stt-model"]')
+    .forEach((radio) => (radio.disabled = value));
+}
+
+function selectedModel(): TranscriptionModel {
+  const checked = document.querySelector<HTMLInputElement>(
+    'input[name="stt-model"]:checked'
+  );
+  return (checked?.value ?? 'universal-2') as TranscriptionModel;
+}
+
+/** Reflete na UI se existe chave salva (sem nunca mostrar a chave inteira). */
+async function renderKeyStatus(): Promise<void> {
+  const status = await api.getApiKeyStatus();
+  if (status.saved) {
+    keyStatus.textContent = `Chave salva (termina em ${status.hint}), cifrada pelo cofre do Windows.`;
+    apiKeyInput.placeholder = 'chave salva — cole outra para trocar';
+    btnClearKey.classList.remove('hidden');
+  } else {
+    keyStatus.textContent = 'Nenhuma chave salva. Veja o README para criar uma.';
+    apiKeyInput.placeholder = 'cole aqui a chave da AssemblyAI';
+    btnClearKey.classList.add('hidden');
+  }
+  apiKeyInput.value = '';
+}
+
+void renderKeyStatus();
+setTranscribeTarget(null);
+
+btnSaveKey.addEventListener('click', async () => {
+  const key = apiKeyInput.value.trim();
+  if (!key) {
+    showTranscribeStatus('Cole a chave no campo antes de salvar.', 'error');
+    return;
+  }
+  try {
+    await api.saveApiKey(key);
+    await renderKeyStatus();
+    showTranscribeStatus('Chave salva.', 'success');
+  } catch (err) {
+    showTranscribeStatus(err instanceof Error ? err.message : String(err), 'error');
+  }
+});
+
+btnClearKey.addEventListener('click', async () => {
+  await api.clearApiKey();
+  await renderKeyStatus();
+  showTranscribeStatus('Chave removida deste computador.', 'info');
+});
+
+btnChooseAudio.addEventListener('click', async () => {
+  const filePath = await api.selectAudio();
+  if (filePath) setTranscribeTarget(filePath);
+});
+
+api.onTranscribeProgress((p: TranscribeProgress) => {
+  // percent === -1 significa "a API não diz o andamento": barra indeterminada.
+  const unknown = p.percent < 0;
+  transcribeBar.classList.toggle('indeterminate', unknown);
+  transcribeBar.style.width = unknown ? '100%' : `${p.percent.toFixed(1)}%`;
+  transcribeProgressText.textContent = p.message;
+});
+
+btnTranscribe.addEventListener('click', async () => {
+  if (!transcribeAudioPath || transcribing) return;
+
+  const model = selectedModel();
+  transcribeStatusBox.classList.add('hidden');
+  transcribeActions.classList.add('hidden');
+  lastTranscriptPath = null;
+  setTranscribing(true);
+  transcribeProgressBox.classList.remove('hidden');
+  transcribeBar.classList.remove('indeterminate');
+  transcribeBar.style.width = '0%';
+  transcribeProgressText.textContent = 'Preparando…';
+
+  const result = await api.transcribe({ audioPath: transcribeAudioPath, model });
+
+  setTranscribing(false);
+  transcribeProgressBox.classList.add('hidden');
+  transcribeBar.classList.remove('indeterminate');
+
+  if (result.ok) {
+    lastTranscriptPath = result.outputPath;
+    showTranscribeStatus(
+      `Transcrição pronta (${result.speakerCount} locutores identificados):\n${result.outputPath}`,
+      'success'
+    );
+    transcribeActions.classList.remove('hidden');
+  } else {
+    showTranscribeStatus(result.error, 'error');
+  }
+});
+
+btnCancelTranscribe.addEventListener('click', async () => {
+  await api.cancelTranscription();
+});
+
+btnOpenTranscript.addEventListener('click', async () => {
+  if (!lastTranscriptPath) return;
+  const error = await api.openFile(lastTranscriptPath);
+  if (error) showTranscribeStatus(`Não foi possível abrir: ${error}`, 'error');
+});
+
+btnTranscriptFolder.addEventListener('click', () => {
+  if (lastTranscriptPath) void api.showInFolder(lastTranscriptPath);
 });

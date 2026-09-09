@@ -4,9 +4,13 @@
  */
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
+  ApiKeyStatus,
   ExtractOptions,
   ExtractProgress,
   ExtractResult,
+  TranscribeOptions,
+  TranscribeProgress,
+  TranscribeResult,
   VideoInfo,
 } from '../shared/types';
 
@@ -54,6 +58,41 @@ const api = {
   /** Abre o arquivo no player padrão. */
   openFile: (filePath: string): Promise<string> =>
     ipcRenderer.invoke('shell:openFile', filePath),
+
+  /* --- Transcrição (Fase 2) --- */
+
+  /** Escolhe um áudio já extraído para transcrever. */
+  selectAudio: (): Promise<string | null> =>
+    ipcRenderer.invoke('dialog:selectAudio'),
+
+  /** Se existe chave salva, e os 4 últimos caracteres dela. */
+  getApiKeyStatus: (): Promise<ApiKeyStatus> =>
+    ipcRenderer.invoke('transcribe:keyStatus'),
+
+  /** Guarda a chave cifrada pelo cofre do sistema. */
+  saveApiKey: (key: string): Promise<ApiKeyStatus> =>
+    ipcRenderer.invoke('transcribe:saveKey', key),
+
+  /** Apaga a chave guardada. */
+  clearApiKey: (): Promise<ApiKeyStatus> =>
+    ipcRenderer.invoke('transcribe:clearKey'),
+
+  /** Dispara a transcrição e resolve com o resultado final. */
+  transcribe: (options: TranscribeOptions): Promise<TranscribeResult> =>
+    ipcRenderer.invoke('transcribe:start', options),
+
+  /** Cancela a transcrição em andamento. */
+  cancelTranscription: (): Promise<boolean> =>
+    ipcRenderer.invoke('transcribe:cancel'),
+
+  /** Assina o progresso da transcrição; devolve função para desassinar. */
+  onTranscribeProgress: (
+    callback: (p: TranscribeProgress) => void
+  ): (() => void) => {
+    const listener = (_event: unknown, p: TranscribeProgress) => callback(p);
+    ipcRenderer.on('transcribe:progress', listener);
+    return () => ipcRenderer.removeListener('transcribe:progress', listener);
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);

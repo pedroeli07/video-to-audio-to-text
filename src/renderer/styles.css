@@ -114,3 +114,36 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .check { display: flex; gap: 7px; align-items: center; cursor: pointer; }
 .check input { accent-color: var(--accent); width: 16px; height: 16px; }
 .hint { margin: -4px 0 0; padding-left: 142px; color: var(--muted); font-size: 13px; }
+.hint.warn { color: #f0b866; }
+
+/* Transcrição */
+.section-title { margin: 0 0 2px; font-size: 15px; font-weight: 600; }
+.models { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.apikey { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.apikey input {
+  flex: 1;
+  min-width: 220px;
+  font: inherit;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+/*
+ * A API não informa andamento depois do upload (fica em "queued"/"processing"),
+ * então a barra vira listrada e animada em vez de mentir uma porcentagem.
+ */
+.progress-bar.indeterminate {
+  width: 100% !important;
+  background-image: linear-gradient(
+    115deg,
+    var(--accent) 25%, #2f5da8 25%, #2f5da8 50%,
+    var(--accent) 50%, var(--accent) 75%, #2f5da8 75%
+  );
+  background-size: 28px 28px;
+  animation: slide 1s linear infinite;
+  transition: none;
+}
+@keyframes slide { from { background-position: 0 0; } to { background-position: 28px 0; } }

@@ -19,6 +19,9 @@ export const VIDEO_EXTENSIONS = [
   'mp4', 'mkv', 'mov', 'avi', 'webm', 'wmv', 'flv', 'm4v', 'mpg', 'mpeg', 'ts',
 ];
 
+/** Extensões oferecidas ao escolher um áudio já extraído para transcrever. */
+export const AUDIO_EXTENSIONS = ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'opus', 'flac'];
+
 /**
  * Lê metadados do vídeo com ffprobe.
  * Serve para (a) validar que o arquivo é mesmo um vídeo com áudio e
@@ -59,25 +62,33 @@ export async function probeVideo(inputPath: string): Promise<VideoInfo> {
 }
 
 /**
- * Um caminho só pode ir para dentro de um filtergraph se não tiver aspa
- * simples: o parser do ffmpeg consome a aspa em qualquer forma de escape
- * (testado — `\'`, `\\'` e `'\''` todos falham). Quem chama deve garantir
- * um caminho sem aspas (veja resolveModelPath em rnnoise.ts).
+ * Caracteres que nenhuma forma de escape faz sobreviver ao parser de
+ * filtergraph do ffmpeg (testado com `\x` e `\\x`): a aspa simples some do
+ * caminho, e `, ; [ ]` encerram o filtro no meio. Quem chama precisa fornecer
+ * um caminho sem eles (veja resolveModelPath em rnnoise.ts).
  */
+const FILTER_UNSAFE_CHARS = /[',;[\]]/;
+
+/** Um caminho só pode ir para dentro de um filtergraph se passar aqui. */
 export function isFilterSafePath(filePath: string): boolean {
-  return !filePath.includes("'");
+  return !FILTER_UNSAFE_CHARS.test(filePath);
 }
 
 /**
  * Escapa um caminho para uso como valor de opção dentro de um filtergraph.
  *
- * O parser do ffmpeg trata `\` como escape e `:` como separador de opções,
- * então um caminho do Windows (`C:\Users\...`) quebra o filtro se for passado
- * cru — é a falha clássica que só aparece no app instalado. A ordem importa:
- * primeiro dobramos as barras invertidas, depois escapamos os dois-pontos.
+ * Duas coisas, ambas verificadas rodando o ffmpeg:
+ *
+ * 1. As barras do Windows viram `/`. Não adianta escapá-las: `\` é sempre
+ *    escape aqui, então `C:\video\assets` chega ao filtro como `C:videoassets`
+ *    (o `\v` e o `\a` são consumidos) — e dobrar as barras não muda isso.
+ *    O ffmpeg aceita `/` como separador de caminho no Windows.
+ * 2. O `:` (separador de opções) leva DUAS barras invertidas, porque o valor
+ *    passa por dois unescapes em sequência: o do filtergraph e o da opção do
+ *    filtro. Com uma barra só, o caminho ainda chega quebrado.
  */
 export function escapeFilterPath(filePath: string): string {
-  return filePath.replace(/\\/g, '\\\\').replace(/:/g, '\\:');
+  return filePath.replace(/\\/g, '/').replace(/:/g, '\\\\:');
 }
 
 /**
@@ -109,8 +120,8 @@ export function buildDenoiseFilters(
   const filters: string[] = [];
   if (level !== 'off' && !isFilterSafePath(modelPath)) {
     throw new Error(
-      'O caminho do modelo de redução de ruído contém uma aspa simples, ' +
-        'que o ffmpeg não aceita. Instale o app em outra pasta.'
+      'O caminho do modelo de redução de ruído contém um caractere que o ' +
+        "ffmpeg não aceita dentro de um filtro (' , ; [ ]). Instale o app em outra pasta."
     );
   }
   const model = escapeFilterPath(modelPath);

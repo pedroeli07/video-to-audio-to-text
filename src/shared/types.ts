@@ -59,3 +59,63 @@ export interface VideoInfo {
   durationSeconds: number;
   hasAudio: boolean;
 }
+
+/* ------------------------------------------------------------------ */
+/* Transcrição (Fase 2)                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Modelo de transcrição da AssemblyAI. Os dois suportam português e
+ * diarização; existem lado a lado para dar para transcrever a mesma reunião
+ * nos dois e comparar se o mais caro compensa.
+ *
+ * Preço por hora de áudio, já somando o adicional de diarização (+US$ 0,02):
+ * - universal-2:       US$ 0,15 + 0,02 = US$ 0,17
+ * - universal-3-5-pro: US$ 0,21 + 0,02 = US$ 0,23
+ */
+export type TranscriptionModel = 'universal-2' | 'universal-3-5-pro';
+
+/** Opções enviadas pelo renderer ao pedir uma transcrição. */
+export interface TranscribeOptions {
+  /** Caminho do áudio já extraído (mp3 ou wav). */
+  audioPath: string;
+  model: TranscriptionModel;
+  /**
+   * Quantidade de participantes, quando o usuário sabe. Opcional: sem isso a
+   * API descobre sozinha, mas informar reduz erro de agrupamento de vozes.
+   */
+  speakersExpected?: number;
+}
+
+/** Etapa atual da transcrição, para a UI dizer o que está acontecendo. */
+export type TranscribeStage = 'upload' | 'queued' | 'processing';
+
+/** Progresso da transcrição (main -> renderer). */
+export interface TranscribeProgress {
+  stage: TranscribeStage;
+  /**
+   * 0 a 100 durante o upload. Vale -1 na fila e no processamento: a API não
+   * informa andamento, então a UI mostra uma barra indeterminada.
+   */
+  percent: number;
+  message: string;
+}
+
+/** Resultado final da transcrição. */
+export type TranscribeResult =
+  | {
+      ok: true;
+      /** Caminho do .txt gerado, com o nome do modelo no final. */
+      outputPath: string;
+      /** Quantas vozes distintas a diarização encontrou. */
+      speakerCount: number;
+      model: TranscriptionModel;
+    }
+  | { ok: false; error: string };
+
+/** Estado da chave da API guardada no disco (nunca devolvemos a chave em si). */
+export interface ApiKeyStatus {
+  saved: boolean;
+  /** Últimos 4 caracteres, só para o usuário reconhecer qual chave está lá. */
+  hint?: string;
+}
