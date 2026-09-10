@@ -7,6 +7,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import os from 'node:os';
 import {
   AUDIO_EXTENSIONS,
+  probeAudio,
   probeVideo,
   startExtraction,
   VIDEO_EXTENSIONS,
@@ -21,7 +22,7 @@ import type {
   ExtractResult,
   TranscribeOptions,
   TranscribeResult,
-  VideoInfo,
+  MediaInfo,
 } from '../shared/types';
 
 let mainWindow: BrowserWindow | null = null;
@@ -75,7 +76,7 @@ app.on('window-all-closed', () => {
 /* ------------------------------------------------------------------ */
 
 /** Abre o seletor de arquivos e retorna os metadados do vídeo escolhido. */
-ipcMain.handle('dialog:selectVideo', async (): Promise<VideoInfo | null> => {
+ipcMain.handle('dialog:selectVideo', async (): Promise<MediaInfo | null> => {
   if (!mainWindow) return null;
 
   const result = await dialog.showOpenDialog(mainWindow, {
@@ -94,7 +95,7 @@ ipcMain.handle('dialog:selectVideo', async (): Promise<VideoInfo | null> => {
 /** Usado pelo drag & drop: valida e lê metadados de um caminho já conhecido. */
 ipcMain.handle(
   'video:probe',
-  async (_event, filePath: string): Promise<VideoInfo> => probeVideo(filePath)
+  async (_event, filePath: string): Promise<MediaInfo> => probeVideo(filePath)
 );
 
 /** Escolha da pasta de saída (opcional; por padrão usamos a pasta do vídeo). */
@@ -236,7 +237,7 @@ ipcMain.handle('shell:openFile', async (_event, filePath: string): Promise<strin
  * numa sessão futura sem ter que reprocessar o vídeo de 1 h só para comparar
  * os dois modelos.
  */
-ipcMain.handle('dialog:selectAudio', async (): Promise<string | null> => {
+ipcMain.handle('dialog:selectAudio', async (): Promise<MediaInfo | null> => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, {
     title: 'Selecione o áudio para transcrever',
@@ -247,8 +248,14 @@ ipcMain.handle('dialog:selectAudio', async (): Promise<string | null> => {
     ],
   });
   if (result.canceled || result.filePaths.length === 0) return null;
-  return result.filePaths[0];
+  return probeAudio(result.filePaths[0]);
 });
+
+/** Usado pelo drag & drop na dropzone de áudio. */
+ipcMain.handle(
+  'audio:probe',
+  async (_event, filePath: string): Promise<MediaInfo> => probeAudio(filePath)
+);
 
 ipcMain.handle('transcribe:keyStatus', (): ApiKeyStatus => apiKeyStatus());
 

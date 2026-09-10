@@ -25,7 +25,8 @@ problemas: roda offline e não tem limite prático de tamanho ou duração.
 
 ## Funcionalidades (Fase 1)
 
-- Selecionar o vídeo por diálogo nativo **ou arrastando e soltando** na janela.
+- Selecionar o vídeo por diálogo nativo **ou arrastando e soltando** na
+  dropzone de vídeo (a da esquerda).
 - Extrair o áudio em **MP3** (padrão, mono 128 kbps) ou **WAV** (PCM 16 bits,
   16 kHz mono — sem perdas e já no formato que a maioria dos modelos de
   transcrição prefere, pensando na Fase 2).
@@ -55,7 +56,11 @@ renderer só recebe eventos de progresso.
 - **Escolha entre dois modelos** (Universal-2 e Universal-3.5 Pro) para
   transcrever a mesma reunião nos dois e comparar antes de decidir qual usar.
 - **Chave da API cifrada pelo cofre do Windows**, nunca em texto puro.
-- **Transcrever um áudio já extraído**, sem precisar reprocessar o vídeo.
+- **Duas entradas, lado a lado**: arraste um **vídeo** (extrai o áudio primeiro)
+  ou um **áudio** que você já tem (vai direto para a transcrição, sem
+  reprocessar nada).
+- **Custo estimado antes de enviar**, calculado da duração do arquivo e do
+  modelo marcado.
 - **Cancelar** uma transcrição em andamento (inclusive durante o upload).
 
 Detalhes, preços e como obter a chave: [Transcrição](#transcrição-com-separação-de-locutores).
@@ -125,8 +130,21 @@ arquivo inteiro.
 
 ## Transcrição com separação de locutores
 
-O card **"Transcrição (opcional)"**, no fim da tela, converte o áudio extraído
-em um arquivo `.txt` já separando quem falou:
+Há **duas formas de chegar na transcrição**, nas duas dropzones do topo da tela:
+
+- **Arraste um vídeo** na dropzone da esquerda → extraia o áudio → o arquivo
+  gerado já entra na transcrição sozinho.
+- **Arraste um áudio** na dropzone da direita → vai direto para a transcrição.
+  É o caminho para quando você já converteu os vídeos antes: não reprocessa nada.
+
+A dropzone de áudio recusa vídeo de propósito e manda você para a da esquerda —
+enviar um arquivo de vários GB para a API, em vez do áudio de algumas dezenas de
+MB, seria lento à toa. (Capa de álbum em MP3 não conta como vídeo: ela aparece
+como stream de vídeo no ffprobe, mas marcada `attached_pic`.)
+
+O card **"Transcrição (opcional)"**, no fim da tela, mostra qual áudio será
+enviado, **quanto ele deve custar** no modelo marcado, e gera um `.txt` já
+separando quem falou:
 
 ```
 Transcrição de: reuniao.mp3

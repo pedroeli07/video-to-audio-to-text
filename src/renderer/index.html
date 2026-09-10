@@ -20,10 +20,21 @@
         </p>
       </header>
 
-      <!-- 1. Seleção do vídeo (clique ou arrastar e soltar) -->
-      <section id="dropzone" class="dropzone" tabindex="0">
-        <p class="dropzone-title">Arraste um vídeo aqui</p>
-        <p class="dropzone-hint">ou clique para escolher um arquivo</p>
+      <!--
+        1. Entrada. Dois caminhos: vídeo (extrai o áudio, e daí dá para
+        transcrever) ou áudio já pronto (vai direto para a transcrição).
+      -->
+      <section class="dropzones">
+        <div id="dropzone" class="dropzone" tabindex="0">
+          <p class="dropzone-title">Arraste um vídeo</p>
+          <p class="dropzone-hint">extrai o áudio primeiro</p>
+          <p id="dropzone-file" class="dropzone-file"></p>
+        </div>
+        <div id="dropzone-audio" class="dropzone" tabindex="0">
+          <p class="dropzone-title">Arraste um áudio</p>
+          <p class="dropzone-hint">vai direto para a transcrição</p>
+          <p id="dropzone-audio-file" class="dropzone-file"></p>
+        </div>
       </section>
 
       <section id="file-info" class="card hidden">
@@ -111,9 +122,8 @@
 
         <div class="row">
           <span class="label">Áudio</span>
-          <span class="value output-dir">
-            <span id="transcribe-target">extraia um áudio acima</span>
-            <button id="btn-choose-audio" class="link">escolher outro…</button>
+          <span class="value" id="transcribe-target">
+            arraste um áudio acima, ou extraia de um vídeo
           </span>
         </div>
 
