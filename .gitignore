@@ -3,3 +3,11 @@ dist/
 release/
 *.log
 .DS_Store
+
+# Credenciais locais.
+# A chave da API do app NÃO fica aqui: ela é digitada na interface e cifrada
+# pelo cofre do sistema, em %APPDATA%. Isto é guarda para scripts de teste que
+# um dia precisem de uma chave real — para o segredo já nascer ignorado.
+.env
+.env.*
+!.env.example
