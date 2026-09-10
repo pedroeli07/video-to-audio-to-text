@@ -33,11 +33,19 @@ h1 { margin: 0 0 4px; font-size: 22px; }
 
 .hidden { display: none !important; }
 
-/* Área de arrastar e soltar */
+/* Áreas de arrastar e soltar: vídeo e áudio, lado a lado */
+.dropzones { display: flex; gap: 16px; }
+.dropzones > .dropzone { flex: 1 1 0; min-width: 0; }
+
+/* Numa janela estreita elas empilham em vez de espremer o texto. */
+@media (max-width: 560px) {
+  .dropzones { flex-direction: column; }
+}
+
 .dropzone {
   border: 2px dashed var(--border);
   border-radius: 12px;
-  padding: 36px 16px;
+  padding: 28px 16px;
   text-align: center;
   cursor: pointer;
   transition: border-color .15s, background .15s;
@@ -51,6 +59,18 @@ h1 { margin: 0 0 4px; font-size: 22px; }
 }
 .dropzone-title { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
 .dropzone-hint { margin: 0; color: var(--muted); }
+
+/* Nome do arquivo solto, dentro da própria dropzone. Vazio = display:none. */
+.dropzone-file {
+  margin: 8px 0 0;
+  color: var(--accent);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.dropzone-file:empty { display: none; }
+
+/* Marca qual das duas está carregada. */
+.dropzone.loaded { border-style: solid; border-color: var(--accent); }
 
 .card {
   background: var(--card);

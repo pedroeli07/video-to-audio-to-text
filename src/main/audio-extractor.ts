@@ -11,7 +11,7 @@ import type {
   DenoiseLevel,
   ExtractOptions,
   ExtractProgress,
-  VideoInfo,
+  MediaInfo,
 } from '../shared/types';
 
 /** Extensões aceitas no seletor de arquivos e na validação do drag & drop. */
@@ -23,11 +23,16 @@ export const VIDEO_EXTENSIONS = [
 export const AUDIO_EXTENSIONS = ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'opus', 'flac'];
 
 /**
- * Lê metadados do vídeo com ffprobe.
- * Serve para (a) validar que o arquivo é mesmo um vídeo com áudio e
- * (b) obter a duração, usada para calcular o progresso em %.
+ * Lê metadados de um arquivo de mídia com ffprobe.
+ * Serve para (a) validar que o arquivo é mesmo mídia com faixa de áudio e
+ * (b) obter a duração, usada para o progresso em % e para estimar o custo.
+ *
+ * `kind` só muda a mensagem de erro: o ffprobe é o mesmo para vídeo e áudio.
  */
-export async function probeVideo(inputPath: string): Promise<VideoInfo> {
+async function probeMedia(
+  inputPath: string,
+  kind: 'vídeo' | 'áudio'
+): Promise<MediaInfo> {
   setupFfmpeg();
 
   const stat = await fs.promises.stat(inputPath);
@@ -40,7 +45,7 @@ export async function probeVideo(inputPath: string): Promise<VideoInfo> {
       if (err) {
         reject(
           new Error(
-            'Não foi possível ler o arquivo. Ele parece não ser um vídeo válido ou está corrompido.'
+            `Não foi possível ler o arquivo. Ele parece não ser um ${kind} válido ou está corrompido.`
           )
         );
         return;
@@ -49,8 +54,15 @@ export async function probeVideo(inputPath: string): Promise<VideoInfo> {
     });
   });
 
-  const hasAudio = (data.streams ?? []).some((s) => s.codec_type === 'audio');
+  const streams = data.streams ?? [];
+  const hasAudio = streams.some((s) => s.codec_type === 'audio');
   const durationSeconds = Number(data.format?.duration ?? 0) || 0;
+
+  // Capa de álbum num MP3 também aparece como stream de vídeo; o que a
+  // distingue de imagem em movimento é o disposition `attached_pic`.
+  const hasVideoImage = streams.some(
+    (s) => s.codec_type === 'video' && s.disposition?.attached_pic !== 1
+  );
 
   return {
     path: inputPath,
@@ -58,7 +70,30 @@ export async function probeVideo(inputPath: string): Promise<VideoInfo> {
     sizeBytes: stat.size,
     durationSeconds,
     hasAudio,
+    hasVideoImage,
   };
+}
+
+/** Metadados do vídeo a converter. */
+export const probeVideo = (inputPath: string): Promise<MediaInfo> =>
+  probeMedia(inputPath, 'vídeo');
+
+/**
+ * Metadados do áudio a transcrever, quando o usuário já tem o arquivo pronto.
+ *
+ * Recusa vídeo de propósito: a API até aceitaria, mas subir um arquivo de
+ * vários GB em vez do áudio de algumas dezenas de MB é lento à toa. O caminho
+ * certo para vídeo é extrair primeiro.
+ */
+export async function probeAudio(inputPath: string): Promise<MediaInfo> {
+  const info = await probeMedia(inputPath, 'áudio');
+  if (info.hasVideoImage) {
+    throw new Error(
+      'Isso parece um vídeo. Solte-o no card da esquerda para extrair o áudio ' +
+        'primeiro — enviar o vídeo inteiro para a API seria bem mais lento.'
+    );
+  }
+  return info;
 }
 
 /**

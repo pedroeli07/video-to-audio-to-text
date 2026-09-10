@@ -51,13 +51,23 @@ export type ExtractResult =
   | { ok: true; outputPath: string; durationSeconds: number }
   | { ok: false; error: string };
 
-/** Metadados básicos do vídeo selecionado, mostrados na UI. */
-export interface VideoInfo {
+/**
+ * Metadados básicos de um arquivo de mídia, mostrados na UI.
+ * Serve tanto para o vídeo a extrair quanto para o áudio a transcrever —
+ * os dois vêm do mesmo ffprobe.
+ */
+export interface MediaInfo {
   path: string;
   fileName: string;
   sizeBytes: number;
   durationSeconds: number;
+  /** Falso num vídeo gravado sem microfone: não há o que extrair nem transcrever. */
   hasAudio: boolean;
+  /**
+   * Tem imagem em movimento, ou seja, é vídeo de verdade. Capa de álbum em
+   * MP3 não conta — ela vem como stream de vídeo, mas marcada `attached_pic`.
+   */
+  hasVideoImage: boolean;
 }
 
 /* ------------------------------------------------------------------ */

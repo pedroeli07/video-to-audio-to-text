@@ -11,16 +11,16 @@ import type {
   TranscribeOptions,
   TranscribeProgress,
   TranscribeResult,
-  VideoInfo,
+  MediaInfo,
 } from '../shared/types';
 
 const api = {
   /** Abre o diálogo nativo de seleção de vídeo. */
-  selectVideo: (): Promise<VideoInfo | null> =>
+  selectVideo: (): Promise<MediaInfo | null> =>
     ipcRenderer.invoke('dialog:selectVideo'),
 
   /** Lê metadados de um caminho (usado no drag & drop). */
-  probeVideo: (filePath: string): Promise<VideoInfo> =>
+  probeVideo: (filePath: string): Promise<MediaInfo> =>
     ipcRenderer.invoke('video:probe', filePath),
 
   /** Diálogo de pasta de saída. */
@@ -61,9 +61,13 @@ const api = {
 
   /* --- Transcrição (Fase 2) --- */
 
-  /** Escolhe um áudio já extraído para transcrever. */
-  selectAudio: (): Promise<string | null> =>
+  /** Escolhe um áudio já pronto para transcrever. */
+  selectAudio: (): Promise<MediaInfo | null> =>
     ipcRenderer.invoke('dialog:selectAudio'),
+
+  /** Lê metadados de um áudio (usado no drag & drop da dropzone de áudio). */
+  probeAudio: (filePath: string): Promise<MediaInfo> =>
+    ipcRenderer.invoke('audio:probe', filePath),
 
   /** Se existe chave salva, e os 4 últimos caracteres dela. */
   getApiKeyStatus: (): Promise<ApiKeyStatus> =>

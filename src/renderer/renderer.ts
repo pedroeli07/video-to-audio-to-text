@@ -6,7 +6,7 @@
  * carregado direto com <script src>. Os tipos vêm por `import(...)`
  * no nível de tipo, que não gera código.
  */
-type VideoInfo = import('../shared/types').VideoInfo;
+type MediaInfo = import('../shared/types').MediaInfo;
 type ExtractProgress = import('../shared/types').ExtractProgress;
 type TranscribeProgress = import('../shared/types').TranscribeProgress;
 type TranscriptionModel = import('../shared/types').TranscriptionModel;
@@ -50,11 +50,14 @@ function formatDuration(seconds: number): string {
 /* Estado                                                            */
 /* ---------------------------------------------------------------- */
 
-let selectedVideo: VideoInfo | null = null;
+let selectedVideo: MediaInfo | null = null;
 let customOutputDir: string | null = null;
 let running = false;
 
 const dropzone = $<HTMLElement>('dropzone');
+const dropzoneFile = $<HTMLElement>('dropzone-file');
+const dropzoneAudio = $<HTMLElement>('dropzone-audio');
+const dropzoneAudioFile = $<HTMLElement>('dropzone-audio-file');
 const fileInfo = $<HTMLElement>('file-info');
 const infoName = $<HTMLElement>('info-name');
 const infoSize = $<HTMLElement>('info-size');
@@ -101,6 +104,8 @@ function clearStatus(): void {
 function renderVideoInfo(): void {
   if (!selectedVideo) {
     fileInfo.classList.add('hidden');
+    dropzoneFile.textContent = '';
+    dropzone.classList.remove('loaded');
     btnExtract.disabled = true;
     btnPreview.disabled = true;
     return;
@@ -108,6 +113,8 @@ function renderVideoInfo(): void {
   infoName.textContent = selectedVideo.fileName;
   infoSize.textContent = formatBytes(selectedVideo.sizeBytes);
   infoDuration.textContent = formatDuration(selectedVideo.durationSeconds);
+  dropzoneFile.textContent = selectedVideo.fileName;
+  dropzone.classList.add('loaded');
   fileInfo.classList.remove('hidden');
   btnExtract.disabled = running;
   btnPreview.disabled = running;
@@ -148,52 +155,85 @@ async function loadVideo(filePath: string): Promise<void> {
 /* Eventos                                                           */
 /* ---------------------------------------------------------------- */
 
-// Seleção via diálogo nativo
-dropzone.addEventListener('click', async () => {
-  clearStatus();
-  try {
-    const info = await api.selectVideo();
-    if (info) {
-      selectedVideo = info;
-      if (!info.hasAudio) {
-        showStatus('Atenção: este arquivo não parece ter faixa de áudio.', 'error');
-      }
-      renderVideoInfo();
+/**
+ * Liga uma dropzone: clique abre o diálogo nativo, Enter/Espaço fazem o mesmo
+ * pelo teclado, e soltar um arquivo entrega o caminho. As duas zonas (vídeo e
+ * áudio) precisam exatamente disso, só mudando o que fazer com o arquivo.
+ */
+function wireDropzone(
+  zone: HTMLElement,
+  handlers: {
+    onClick: () => Promise<void>;
+    onDrop: (filePath: string) => Promise<void>;
+    onPathError: (message: string) => void;
+  }
+): void {
+  zone.addEventListener('click', () => void handlers.onClick());
+
+  zone.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      zone.click();
     }
-  } catch (err) {
-    showStatus(err instanceof Error ? err.message : String(err), 'error');
-  }
+  });
+
+  ['dragenter', 'dragover'].forEach((evt) =>
+    zone.addEventListener(evt, (e) => {
+      e.preventDefault();
+      zone.classList.add('dragover');
+    })
+  );
+  ['dragleave', 'drop'].forEach((evt) =>
+    zone.addEventListener(evt, () => zone.classList.remove('dragover'))
+  );
+
+  zone.addEventListener('drop', async (event) => {
+    event.preventDefault();
+    const file = (event as DragEvent).dataTransfer?.files?.[0];
+    if (!file) return;
+    // Em contextIsolation, o caminho real só é obtido via webUtils (preload).
+    const filePath = api.getPathForFile(file);
+    if (!filePath) {
+      handlers.onPathError('Não foi possível ler o caminho do arquivo arrastado.');
+      return;
+    }
+    await handlers.onDrop(filePath);
+  });
+}
+
+// Vídeo: extrai o áudio.
+wireDropzone(dropzone, {
+  onClick: async () => {
+    clearStatus();
+    try {
+      const info = await api.selectVideo();
+      if (info) {
+        selectedVideo = info;
+        if (!info.hasAudio) {
+          showStatus('Atenção: este arquivo não parece ter faixa de áudio.', 'error');
+        }
+        renderVideoInfo();
+      }
+    } catch (err) {
+      showStatus(err instanceof Error ? err.message : String(err), 'error');
+    }
+  },
+  onDrop: loadVideo,
+  onPathError: (message) => showStatus(message, 'error'),
 });
 
-dropzone.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' || e.key === ' ') {
-    e.preventDefault();
-    dropzone.click();
-  }
-});
-
-// Drag & drop
-['dragenter', 'dragover'].forEach((evt) =>
-  dropzone.addEventListener(evt, (e) => {
-    e.preventDefault();
-    dropzone.classList.add('dragover');
-  })
-);
-['dragleave', 'drop'].forEach((evt) =>
-  dropzone.addEventListener(evt, () => dropzone.classList.remove('dragover'))
-);
-
-dropzone.addEventListener('drop', async (event) => {
-  event.preventDefault();
-  const file = (event as DragEvent).dataTransfer?.files?.[0];
-  if (!file) return;
-  // Em contextIsolation, o caminho real só é obtido via webUtils (preload).
-  const filePath = api.getPathForFile(file);
-  if (!filePath) {
-    showStatus('Não foi possível ler o caminho do arquivo arrastado.', 'error');
-    return;
-  }
-  await loadVideo(filePath);
+// Áudio já pronto: pula a extração e vai direto para a transcrição.
+wireDropzone(dropzoneAudio, {
+  onClick: async () => {
+    try {
+      const info = await api.selectAudio();
+      if (info) setTranscribeTarget(info);
+    } catch (err) {
+      showTranscribeStatus(err instanceof Error ? err.message : String(err), 'error');
+    }
+  },
+  onDrop: loadAudio,
+  onPathError: (message) => showTranscribeStatus(message, 'error'),
 });
 
 // Evita que soltar um arquivo fora da dropzone navegue a janela.
@@ -303,7 +343,11 @@ btnExtract.addEventListener('click', async () => {
     showStatus(`Áudio salvo em:\n${result.outputPath}`, 'success');
     resultActions.classList.remove('hidden');
     // O áudio recém-gerado vira o alvo da transcrição, sem o usuário reescolher.
-    setTranscribeTarget(result.outputPath);
+    setTranscribeTarget({
+      path: result.outputPath,
+      fileName: fileNameOf(result.outputPath),
+      durationSeconds: result.durationSeconds,
+    });
   } else {
     showStatus(result.error, 'error');
   }
@@ -328,7 +372,6 @@ btnOpenFile.addEventListener('click', async () => {
 /* ---------------------------------------------------------------- */
 
 const transcribeTarget = $<HTMLElement>('transcribe-target');
-const btnChooseAudio = $<HTMLButtonElement>('btn-choose-audio');
 const apiKeyInput = $<HTMLInputElement>('api-key');
 const btnSaveKey = $<HTMLButtonElement>('btn-save-key');
 const btnClearKey = $<HTMLButtonElement>('btn-clear-key');
@@ -344,8 +387,21 @@ const transcribeActions = $<HTMLElement>('transcribe-actions');
 const btnOpenTranscript = $<HTMLButtonElement>('btn-open-transcript');
 const btnTranscriptFolder = $<HTMLButtonElement>('btn-transcript-folder');
 
-/** Áudio que será transcrito: o último extraído, ou um escolhido à mão. */
-let transcribeAudioPath: string | null = null;
+/** Preço por hora de áudio, já com o adicional de diarização. */
+const MODEL_RATE_USD: Record<TranscriptionModel, number> = {
+  'universal-2': 0.17,
+  'universal-3-5-pro': 0.23,
+};
+
+/** O que precisamos saber do áudio a transcrever. `MediaInfo` já serve. */
+interface TranscribeTarget {
+  path: string;
+  fileName: string;
+  durationSeconds: number;
+}
+
+/** Áudio que será transcrito: o último extraído, ou um solto na dropzone. */
+let transcribeAudio: TranscribeTarget | null = null;
 /** Caminho do último .txt gerado, para os botões "Abrir…". */
 let lastTranscriptPath: string | null = null;
 let transcribing = false;
@@ -354,12 +410,49 @@ function fileNameOf(filePath: string): string {
   return filePath.split(/[\\/]/).pop() ?? filePath;
 }
 
-function setTranscribeTarget(filePath: string | null): void {
-  transcribeAudioPath = filePath;
-  transcribeTarget.textContent = filePath
-    ? fileNameOf(filePath)
-    : 'extraia um áudio acima';
-  btnTranscribe.disabled = transcribing || !filePath;
+/**
+ * Mostra qual áudio será transcrito e quanto ele deve custar.
+ * O custo depende do modelo marcado, então isto roda de novo a cada troca.
+ */
+function renderTranscribeTarget(): void {
+  if (!transcribeAudio) {
+    transcribeTarget.textContent = 'arraste um áudio acima, ou extraia de um vídeo';
+    dropzoneAudioFile.textContent = '';
+    dropzoneAudio.classList.remove('loaded');
+    btnTranscribe.disabled = true;
+    return;
+  }
+
+  const { fileName, durationSeconds } = transcribeAudio;
+  const cost = (durationSeconds / 3600) * MODEL_RATE_USD[selectedModel()];
+  transcribeTarget.textContent =
+    durationSeconds > 0
+      ? `${fileName} — ${formatDuration(durationSeconds)}, custo estimado US$ ${cost.toFixed(2)}`
+      : fileName;
+
+  dropzoneAudioFile.textContent = fileName;
+  dropzoneAudio.classList.add('loaded');
+  btnTranscribe.disabled = transcribing;
+}
+
+function setTranscribeTarget(target: TranscribeTarget | null): void {
+  transcribeAudio = target;
+  renderTranscribeTarget();
+}
+
+/** Carrega um áudio solto na dropzone, validando que não é vídeo. */
+async function loadAudio(filePath: string): Promise<void> {
+  transcribeStatusBox.classList.add('hidden');
+  try {
+    const info = await api.probeAudio(filePath);
+    if (!info.hasAudio) {
+      showTranscribeStatus('Este arquivo não tem faixa de áudio.', 'error');
+      return;
+    }
+    setTranscribeTarget(info);
+  } catch (err) {
+    showTranscribeStatus(err instanceof Error ? err.message : String(err), 'error');
+  }
 }
 
 function showTranscribeStatus(
@@ -373,12 +466,13 @@ function showTranscribeStatus(
 
 function setTranscribing(value: boolean): void {
   transcribing = value;
-  btnTranscribe.disabled = value || !transcribeAudioPath;
+  btnTranscribe.disabled = value || !transcribeAudio;
   btnCancelTranscribe.classList.toggle('hidden', !value);
-  btnChooseAudio.disabled = value;
   btnSaveKey.disabled = value;
   btnClearKey.disabled = value;
   apiKeyInput.disabled = value;
+  // Enquanto sobe o arquivo, trocar de áudio ou de modelo só confundiria.
+  dropzoneAudio.style.pointerEvents = value ? 'none' : '';
   document
     .querySelectorAll<HTMLInputElement>('input[name="stt-model"]')
     .forEach((radio) => (radio.disabled = value));
@@ -430,10 +524,10 @@ btnClearKey.addEventListener('click', async () => {
   showTranscribeStatus('Chave removida deste computador.', 'info');
 });
 
-btnChooseAudio.addEventListener('click', async () => {
-  const filePath = await api.selectAudio();
-  if (filePath) setTranscribeTarget(filePath);
-});
+// Trocar de modelo muda o custo estimado mostrado ao lado do arquivo.
+document
+  .querySelectorAll<HTMLInputElement>('input[name="stt-model"]')
+  .forEach((radio) => radio.addEventListener('change', renderTranscribeTarget));
 
 api.onTranscribeProgress((p: TranscribeProgress) => {
   // percent === -1 significa "a API não diz o andamento": barra indeterminada.
@@ -444,7 +538,7 @@ api.onTranscribeProgress((p: TranscribeProgress) => {
 });
 
 btnTranscribe.addEventListener('click', async () => {
-  if (!transcribeAudioPath || transcribing) return;
+  if (!transcribeAudio || transcribing) return;
 
   const model = selectedModel();
   transcribeStatusBox.classList.add('hidden');
@@ -456,7 +550,7 @@ btnTranscribe.addEventListener('click', async () => {
   transcribeBar.style.width = '0%';
   transcribeProgressText.textContent = 'Preparando…';
 
-  const result = await api.transcribe({ audioPath: transcribeAudioPath, model });
+  const result = await api.transcribe({ audioPath: transcribeAudio.path, model });
 
   setTranscribing(false);
   transcribeProgressBox.classList.add('hidden');
