@@ -40,10 +40,10 @@ function findModelFile(): string {
 /**
  * Caminho do modelo pronto para ir dentro de um filtro do ffmpeg.
  *
- * Se o caminho de instalação contiver uma aspa simples (por exemplo um usuário
- * do Windows chamado "O'Brien"), o filtro do ffmpeg não consegue recebê-lo —
- * não existe forma de escape que sobreviva ao parser. Nesse caso copiamos o
- * modelo, uma única vez, para uma pasta sem aspas.
+ * Se o caminho de instalação contiver um dos caracteres que o filtergraph do
+ * ffmpeg não consegue receber de jeito nenhum — `'`, `,`, `;`, `[` ou `]`, que
+ * um usuário do Windows chamado "O'Brien" já basta para produzir — copiamos o
+ * modelo, uma única vez, para uma pasta com nome seguro.
  */
 export function resolveModelPath(): string {
   const original = findModelFile();
@@ -62,7 +62,7 @@ export function resolveModelPath(): string {
   if (!isFilterSafePath(target)) {
     throw new Error(
       'Não foi possível preparar o modelo de redução de ruído: todos os ' +
-        'caminhos disponíveis contêm aspas simples, que o ffmpeg não aceita.'
+        "caminhos disponíveis contêm caracteres que o ffmpeg não aceita (' , ; [ ])."
     );
   }
 

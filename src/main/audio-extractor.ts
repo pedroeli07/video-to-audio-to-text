@@ -11,7 +11,7 @@ import type {
   DenoiseLevel,
   ExtractOptions,
   ExtractProgress,
-  VideoInfo,
+  MediaInfo,
 } from '../shared/types';
 
 /** Extensões aceitas no seletor de arquivos e na validação do drag & drop. */
@@ -19,12 +19,20 @@ export const VIDEO_EXTENSIONS = [
   'mp4', 'mkv', 'mov', 'avi', 'webm', 'wmv', 'flv', 'm4v', 'mpg', 'mpeg', 'ts',
 ];
 
+/** Extensões oferecidas ao escolher um áudio já extraído para transcrever. */
+export const AUDIO_EXTENSIONS = ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'opus', 'flac'];
+
 /**
- * Lê metadados do vídeo com ffprobe.
- * Serve para (a) validar que o arquivo é mesmo um vídeo com áudio e
- * (b) obter a duração, usada para calcular o progresso em %.
+ * Lê metadados de um arquivo de mídia com ffprobe.
+ * Serve para (a) validar que o arquivo é mesmo mídia com faixa de áudio e
+ * (b) obter a duração, usada para o progresso em % e para estimar o custo.
+ *
+ * `kind` só muda a mensagem de erro: o ffprobe é o mesmo para vídeo e áudio.
  */
-export async function probeVideo(inputPath: string): Promise<VideoInfo> {
+async function probeMedia(
+  inputPath: string,
+  kind: 'vídeo' | 'áudio'
+): Promise<MediaInfo> {
   setupFfmpeg();
 
   const stat = await fs.promises.stat(inputPath);
@@ -37,7 +45,7 @@ export async function probeVideo(inputPath: string): Promise<VideoInfo> {
       if (err) {
         reject(
           new Error(
-            'Não foi possível ler o arquivo. Ele parece não ser um vídeo válido ou está corrompido.'
+            `Não foi possível ler o arquivo. Ele parece não ser um ${kind} válido ou está corrompido.`
           )
         );
         return;
@@ -46,9 +54,15 @@ export async function probeVideo(inputPath: string): Promise<VideoInfo> {
     });
   });
 
-  const hasAudio = (data.streams ?? []).some((s) => s.codec_type === 'audio');
-  const hasVideo = (data.streams ?? []).some((s) => s.codec_type === 'video');
+  const streams = data.streams ?? [];
+  const hasAudio = streams.some((s) => s.codec_type === 'audio');
   const durationSeconds = Number(data.format?.duration ?? 0) || 0;
+
+  // Capa de álbum num MP3 também aparece como stream de vídeo; o que a
+  // distingue de imagem em movimento é o disposition `attached_pic`.
+  const hasVideoImage = streams.some(
+    (s) => s.codec_type === 'video' && s.disposition?.attached_pic !== 1
+  );
 
   return {
     path: inputPath,
@@ -56,30 +70,60 @@ export async function probeVideo(inputPath: string): Promise<VideoInfo> {
     sizeBytes: stat.size,
     durationSeconds,
     hasAudio,
-    hasVideo,
+    hasVideoImage,
   };
 }
 
+/** Metadados do vídeo a converter. */
+export const probeVideo = (inputPath: string): Promise<MediaInfo> =>
+  probeMedia(inputPath, 'vídeo');
+
 /**
- * Um caminho só pode ir para dentro de um filtergraph se não tiver aspa
- * simples: o parser do ffmpeg consome a aspa em qualquer forma de escape
- * (testado — `\'`, `\\'` e `'\''` todos falham). Quem chama deve garantir
- * um caminho sem aspas (veja resolveModelPath em rnnoise.ts).
+ * Metadados do áudio a transcrever, quando o usuário já tem o arquivo pronto.
+ *
+ * Recusa vídeo de propósito: a API até aceitaria, mas subir um arquivo de
+ * vários GB em vez do áudio de algumas dezenas de MB é lento à toa. O caminho
+ * certo para vídeo é extrair primeiro.
  */
+export async function probeAudio(inputPath: string): Promise<MediaInfo> {
+  const info = await probeMedia(inputPath, 'áudio');
+  if (info.hasVideoImage) {
+    throw new Error(
+      'Isso parece um vídeo. Solte-o no card da esquerda para extrair o áudio ' +
+        'primeiro — enviar o vídeo inteiro para a API seria bem mais lento.'
+    );
+  }
+  return info;
+}
+
+/**
+ * Caracteres que nenhuma forma de escape faz sobreviver ao parser de
+ * filtergraph do ffmpeg (testado com `\x` e `\\x`): a aspa simples some do
+ * caminho, e `, ; [ ]` encerram o filtro no meio. Quem chama precisa fornecer
+ * um caminho sem eles (veja resolveModelPath em rnnoise.ts).
+ */
+const FILTER_UNSAFE_CHARS = /[',;[\]]/;
+
+/** Um caminho só pode ir para dentro de um filtergraph se passar aqui. */
 export function isFilterSafePath(filePath: string): boolean {
-  return !filePath.includes("'");
+  return !FILTER_UNSAFE_CHARS.test(filePath);
 }
 
 /**
  * Escapa um caminho para uso como valor de opção dentro de um filtergraph.
  *
- * O parser do ffmpeg trata `\` como escape e `:` como separador de opções,
- * então um caminho do Windows (`C:\Users\...`) quebra o filtro se for passado
- * cru — é a falha clássica que só aparece no app instalado. A ordem importa:
- * primeiro dobramos as barras invertidas, depois escapamos os dois-pontos.
+ * Duas coisas, ambas verificadas rodando o ffmpeg:
+ *
+ * 1. As barras do Windows viram `/`. Não adianta escapá-las: `\` é sempre
+ *    escape aqui, então `C:\video\assets` chega ao filtro como `C:videoassets`
+ *    (o `\v` e o `\a` são consumidos) — e dobrar as barras não muda isso.
+ *    O ffmpeg aceita `/` como separador de caminho no Windows.
+ * 2. O `:` (separador de opções) leva DUAS barras invertidas, porque o valor
+ *    passa por dois unescapes em sequência: o do filtergraph e o da opção do
+ *    filtro. Com uma barra só, o caminho ainda chega quebrado.
  */
 export function escapeFilterPath(filePath: string): string {
-  return filePath.replace(/\\/g, '\\\\').replace(/:/g, '\\:');
+  return filePath.replace(/\\/g, '/').replace(/:/g, '\\\\:');
 }
 
 /**
@@ -111,8 +155,8 @@ export function buildDenoiseFilters(
   const filters: string[] = [];
   if (level !== 'off' && !isFilterSafePath(modelPath)) {
     throw new Error(
-      'O caminho do modelo de redução de ruído contém uma aspa simples, ' +
-        'que o ffmpeg não aceita. Instale o app em outra pasta.'
+      'O caminho do modelo de redução de ruído contém um caractere que o ' +
+        "ffmpeg não aceita dentro de um filtro (' , ; [ ]). Instale o app em outra pasta."
     );
   }
   const model = escapeFilterPath(modelPath);
@@ -280,7 +324,7 @@ export function startExtraction(
     if (!info.hasAudio) {
       throw new Error('Este arquivo não possui nenhuma faixa de áudio.');
     }
-    if (mode === 'video' && !info.hasVideo) {
+    if (mode === 'video' && !info.hasVideoImage) {
       throw new Error(
         'Este arquivo não tem faixa de vídeo, então não há vídeo para regravar. ' +
           'Use o modo "Extrair o áudio".'
