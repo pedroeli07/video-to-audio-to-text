@@ -177,6 +177,9 @@ ipcMain.handle(
       const job = startExtraction(
         {
           ...options,
+          // A prévia é sempre em áudio, mesmo no modo vídeo: o que se quer
+          // conferir é a limpeza, e assim sai em menos de um segundo.
+          mode: 'audio',
           modelPath,
           // A prévia vai para a pasta temporária: é descartável.
           outputDir: path.join(os.tmpdir(), 'video-to-audio-previas'),

@@ -7,6 +7,7 @@
  * no nível de tipo, que não gera código.
  */
 type VideoInfo = import('../shared/types').VideoInfo;
+type OutputMode = import('../shared/types').OutputMode;
 type ExtractProgress = import('../shared/types').ExtractProgress;
 type PreloadApi = import('../preload/preload').PreloadApi;
 
@@ -58,6 +59,11 @@ const infoName = $<HTMLElement>('info-name');
 const infoSize = $<HTMLElement>('info-size');
 const infoDuration = $<HTMLElement>('info-duration');
 const formatSelect = $<HTMLSelectElement>('format');
+const rowFormat = $<HTMLElement>('row-format');
+const modeHint = $<HTMLElement>('mode-hint');
+const modeInputs = Array.from(
+  document.querySelectorAll<HTMLInputElement>('input[name="mode"]')
+);
 const denoiseCheck = $<HTMLInputElement>('denoise');
 const denoiseLevel = $<HTMLSelectElement>('denoise-level');
 const denoiseHint = $<HTMLElement>('denoise-hint');
@@ -242,10 +248,38 @@ api.onProgress((p: ExtractProgress) => {
       : `Processando… ${p.percent.toFixed(1)}%`;
 });
 
+/** Modo selecionado nos rádios. */
+function currentMode(): OutputMode {
+  return (modeInputs.find((i) => i.checked)?.value as OutputMode) ?? 'audio';
+}
+
+/**
+ * Mostra/esconde o que é específico de cada modo:
+ * - o formato de áudio só existe no modo 'audio';
+ * - no modo 'video' a limpeza é obrigatória (senão a operação não faria nada),
+ *   então deixamos a redução de ruído ligada por padrão ao trocar de modo.
+ */
+function renderMode(): void {
+  const video = currentMode() === 'video';
+  rowFormat.classList.toggle('hidden', video);
+  btnExtract.textContent = video ? 'Salvar vídeo com áudio limpo' : 'Extrair Áudio';
+  modeHint.textContent = video
+    ? 'Gera uma cópia do vídeo com o áudio tratado. A imagem é copiada sem reencodar, então não perde qualidade — e todas as faixas de áudio são limpas.'
+    : 'Gera um arquivo de áudio separado a partir do vídeo.';
+
+  if (video && !denoiseCheck.checked && !normalizeCheck.checked) {
+    denoiseCheck.checked = true;
+    renderDenoise();
+  }
+}
+
+for (const input of modeInputs) input.addEventListener('change', renderMode);
+
 /** Opções escolhidas na tela, usadas tanto pela prévia quanto pela extração. */
 function currentOptions() {
   return {
     inputPath: selectedVideo!.path,
+    mode: currentMode(),
     format: formatSelect.value as 'mp3' | 'wav',
     denoise: denoiseCheck.checked
       ? (denoiseLevel.value as 'leve' | 'forte')
@@ -265,7 +299,9 @@ btnPreview.addEventListener('click', async () => {
   progressBar.style.width = '0%';
   progressText.textContent = 'Gerando prévia de 30s…';
 
-  const result = await api.previewAudio(currentOptions());
+  // A prévia é sempre em áudio: o que se quer conferir é a limpeza, e assim
+  // ela sai em menos de um segundo mesmo numa reunião longa.
+  const result = await api.previewAudio({ ...currentOptions(), mode: 'audio' });
 
   setRunning(false);
   progressBox.classList.add('hidden');
@@ -298,7 +334,9 @@ btnExtract.addEventListener('click', async () => {
 
   if (result.ok) {
     lastOutputPath = result.outputPath;
-    showStatus(`Áudio salvo em:\n${result.outputPath}`, 'success');
+    const label = currentMode() === 'video' ? 'Vídeo' : 'Áudio';
+    btnOpenFile.textContent = currentMode() === 'video' ? 'Abrir vídeo' : 'Abrir áudio';
+    showStatus(`${label} salvo em:\n${result.outputPath}`, 'success');
     resultActions.classList.remove('hidden');
   } else {
     showStatus(result.error, 'error');
@@ -318,3 +356,6 @@ btnOpenFile.addEventListener('click', async () => {
   const error = await api.openFile(lastOutputPath);
   if (error) showStatus(`Não foi possível abrir o arquivo: ${error}`, 'error');
 });
+
+// Estado inicial da tela conforme o modo selecionado.
+renderMode();

@@ -3,8 +3,18 @@
  * Ficam num arquivo só para os dois lados do IPC nunca saírem de sincronia.
  */
 
-/** Formatos de saída suportados na extração. */
+/** Formatos de saída suportados na extração de áudio. */
 export type AudioFormat = 'mp3' | 'wav';
+
+/**
+ * O que o app deve produzir:
+ * - 'audio': extrai a faixa de áudio para um arquivo separado (MP3/WAV).
+ * - 'video': mantém o vídeo e regrava só o áudio, limpo, no mesmo formato de
+ *            arquivo — para assistir à gravação com áudio melhor. O vídeo é
+ *            copiado sem reencodar, então não perde qualidade de imagem nem
+ *            demora para processar.
+ */
+export type OutputMode = 'audio' | 'video';
 
 /**
  * Nível de limpeza de ruído (RNNoise, rede neural treinada para voz).
@@ -20,7 +30,9 @@ export type DenoiseLevel = 'off' | 'leve' | 'forte';
 export interface ExtractOptions {
   /** Caminho absoluto do vídeo de entrada. */
   inputPath: string;
-  /** Formato do áudio de saída. Padrão da UI: mp3. */
+  /** Extrair o áudio ou regravar o vídeo com o áudio limpo. Padrão: 'audio'. */
+  mode: OutputMode;
+  /** Formato do áudio de saída. Usado só no modo 'audio'. Padrão da UI: mp3. */
   format: AudioFormat;
   /** Limpeza de ruído. Padrão da UI: 'off'. */
   denoise: DenoiseLevel;
@@ -58,4 +70,6 @@ export interface VideoInfo {
   sizeBytes: number;
   durationSeconds: number;
   hasAudio: boolean;
+  /** Falso para arquivos só de áudio — o modo 'video' exige uma faixa de vídeo. */
+  hasVideo: boolean;
 }

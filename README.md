@@ -15,12 +15,42 @@ costumam ter limite de 1 GB e, pior, exigem enviar conteúdo potencialmente
 sensível/confidencial para servidores de terceiros. Este app resolve os dois
 problemas: roda offline e não tem limite prático de tamanho ou duração.
 
+## Os dois modos
+
+O app faz duas coisas, escolhidas na própria tela:
+
+| Modo | O que gera | Para que serve |
+| ---- | ---------- | -------------- |
+| **Extrair o áudio** | um `.mp3`/`.wav` separado | guardar só a conversa, e alimentar a transcrição da Fase 2 |
+| **Manter o vídeo e só limpar o áudio** | uma cópia do vídeo, mesmo formato, com o áudio tratado | rever a gravação da reunião com áudio melhor |
+
+No modo vídeo, a **imagem é copiada sem reencodar** (`-c:v copy`): o stream de
+vídeo sai bit a bit idêntico ao original — verificado por md5 nos testes — então
+não há perda de qualidade de imagem, e o tempo de processamento é limitado só
+pelo áudio. **Todas as faixas de áudio são limpas**, não só a primeira, porque
+gravação de reunião às vezes tem duas (microfone e áudio do sistema).
+
+O áudio é reencodado com o codec que o formato do arquivo aceita — isso foi
+testado com o ffmpeg que vai no app, e não é intercambiável:
+
+| Formato de entrada | Codec de áudio na saída | Por quê |
+| ------------------ | ----------------------- | ------- |
+| `.mp4`, `.mov`, `.m4v`, `.mkv`, `.ts` | AAC 192k | padrão, aceito em qualquer player |
+| `.webm` | Opus 128k | o container recusa AAC e MP3 |
+| `.mpg`, `.mpeg` | MP3 192k | MPEG-PS recusa AAC ("must be one of mp1, mp2, mp3") |
+| `.avi`, `.wmv`, `.flv` | MP3 192k | mais compatível com os players antigos que justificam esses formatos |
+
+Como o modo vídeo só faz sentido se algo for melhorado, ele exige a redução de
+ruído **ou** o nivelamento de volume ligado.
+
 ## Funcionalidades (Fase 1)
 
 - Selecionar o vídeo por diálogo nativo **ou arrastando e soltando** na janela.
 - Extrair o áudio em **MP3** (padrão, mono 128 kbps) ou **WAV** (PCM 16 bits,
   16 kHz mono — sem perdas e já no formato que a maioria dos modelos de
   transcrição prefere, pensando na Fase 2).
+- **Dois modos de saída**: extrair o áudio, ou regravar o vídeo com o áudio
+  limpo. Veja [Os dois modos](#os-dois-modos).
 - **Redução de ruído por rede neural** (opcional, dois níveis) — o RNNoise
   identifica a voz quadro a quadro e atenua só o resto. Veja
   [Como funciona a redução de ruído](#como-funciona-a-redução-de-ruído).
@@ -30,9 +60,10 @@ problemas: roda offline e não tem limite prático de tamanho ou duração.
   tempo processado / tempo total.
 - **Cancelar** uma extração em andamento (o arquivo parcial é removido).
 - Salvar na **mesma pasta do vídeo** (padrão) ou numa **pasta de saída
-  escolhida**. O nome do áudio segue o nome do vídeo, e arquivos existentes
+  escolhida**. O nome da saída segue o nome do vídeo, e arquivos existentes
   nunca são sobrescritos (`reuniao.mp3`, `reuniao (1).mp3`, …). Com a limpeza
-  ligada, o nome ganha o sufixo ` - limpo`, para dar para comparar as versões.
+  ligada, o nome ganha o sufixo ` - limpo`, para dar para comparar as versões —
+  inclusive no modo vídeo (`reuniao - limpo.mp4`), então o original fica intacto.
 - Botões para **abrir a pasta** do resultado ou **abrir o áudio** no player padrão.
 - **Erros claros na interface**: arquivo que não é vídeo, vídeo sem faixa de
   áudio, falha do ffmpeg (com as últimas linhas do log).
@@ -94,8 +125,12 @@ Leitura dos números:
 
 Como testar a limpeza numa reunião de 1 h é caro, o botão **"Ouvir prévia de
 30s"** converte só um trecho do meio da gravação (numa reunião de 20 min isso
-levou 0,6 s) e abre no player. Ajuste as opções, ouça, e só então extraia o
+levou 0,6 s) e abre no player. Ajuste as opções, ouça, e só então processe o
 arquivo inteiro.
+
+A prévia sai **sempre em áudio**, mesmo no modo vídeo: o que se quer conferir é
+a limpeza, e assim ela fica instantânea. O resultado é o mesmo que entraria no
+vídeo.
 
 > Se mesmo com a limpeza o áudio continuar ruim, o ganho maior está na origem:
 > microfone mais perto de quem fala e supressão de ruído ativada na própria
@@ -159,7 +194,7 @@ do asar.
 src/
 ├─ main/                  # Main process (Node.js): arquivos, ffmpeg, IPC
 │  ├─ main.ts             # janela, handlers de IPC
-│  ├─ audio-extractor.ts  # ffprobe, filtros de limpeza, prévia e conversão
+│  ├─ audio-extractor.ts  # ffprobe, filtros, prévia, extração e modo vídeo
 │  ├─ rnnoise.ts          # localiza o modelo .rnnn (dev e app empacotado)
 │  └─ ffmpeg-setup.ts     # resolve os binários empacotados (asar.unpacked)
 ├─ preload/
@@ -226,6 +261,9 @@ citação da reunião de origem.
 | Voz ficou abafada ou "metálica"                       | Você usou o nível Forte. Refaça no Leve — o arquivo antigo não é sobrescrito.                        |
 | Ainda tem chiado com a limpeza ligada                 | Tente o nível Forte, usando a prévia para comparar. Vozes ao fundo o RNNoise não remove. |
 | "Modelo de redução de ruído não encontrado"           | O arquivo `assets/rnnoise/bd.rnnn` sumiu do projeto, ou o build não empacotou o `extraResources`. |
+| "ligue a redução de ruído ou o nivelamento"            | No modo vídeo é preciso escolher ao menos uma melhoria — sem isso a cópia seria igual ao original. |
+| "não tem faixa de vídeo"                               | Você escolheu o modo vídeo para um arquivo só de áudio. Use "Extrair o áudio". |
+| O vídeo limpo ficou maior que o original               | Esperado: o áudio original estava bem comprimido e o novo sai em 192k. A imagem não foi tocada. |
 | Erro do ffmpeg no app instalado                       | Confirme que o build manteve o `asarUnpack` do `package.json`.                                     |
 
 ## Licença

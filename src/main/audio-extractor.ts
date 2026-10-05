@@ -47,6 +47,7 @@ export async function probeVideo(inputPath: string): Promise<VideoInfo> {
   });
 
   const hasAudio = (data.streams ?? []).some((s) => s.codec_type === 'audio');
+  const hasVideo = (data.streams ?? []).some((s) => s.codec_type === 'video');
   const durationSeconds = Number(data.format?.duration ?? 0) || 0;
 
   return {
@@ -55,6 +56,7 @@ export async function probeVideo(inputPath: string): Promise<VideoInfo> {
     sizeBytes: stat.size,
     durationSeconds,
     hasAudio,
+    hasVideo,
   };
 }
 
@@ -148,12 +150,69 @@ function applyFormat(command: FfmpegCommand, format: AudioFormat): FfmpegCommand
 }
 
 /**
+ * Modo 'video': copia a faixa de vídeo sem reencodar e regrava só o áudio.
+ *
+ * - `-map 0:v:0 -map 0:a` mantém o vídeo e TODAS as faixas de áudio (gravação
+ *   de reunião às vezes tem duas: microfone e áudio do sistema). O
+ *   `-filter:a` é aplicado a cada faixa de áudio da saída — testado com duas.
+ * - `-c:v copy` é o ponto central: o vídeo sai bit a bit idêntico ao original
+ *   (verificado por md5 do stream), então não há perda de imagem e o
+ *   processamento é rápido, limitado pelo áudio.
+ * - `+faststart` move o índice do MP4 para o começo, o que ajuda players a
+ *   abrir arquivos grandes sem ler tudo antes.
+ */
+function applyVideoPassthrough(
+  command: FfmpegCommand,
+  extension: string
+): FfmpegCommand {
+  const { codec, bitrate } = audioCodecForContainer(extension);
+  const ext = extension.replace('.', '').toLowerCase();
+
+  command
+    .outputOptions(['-map', '0:v:0', '-map', '0:a', '-c:v', 'copy'])
+    .audioCodec(codec)
+    .audioBitrate(bitrate);
+
+  if (['mp4', 'm4v', 'mov'].includes(ext)) {
+    command.outputOptions(['-movflags', '+faststart']);
+  }
+  return command;
+}
+
+/**
+ * Codec de áudio a usar ao regravar o vídeo, por tipo de arquivo.
+ *
+ * Reencodamos só o áudio (o vídeo é copiado), mas cada container aceita um
+ * conjunto diferente de codecs — testado com o ffmpeg que vai no app:
+ * - `.webm` só aceita Opus/Vorbis (AAC e MP3 são recusados);
+ * - `.mpg`/`.mpeg` (MPEG-PS) recusa AAC: "must be one of mp1, mp2, mp3";
+ * - `.avi`, `.wmv` e `.flv` aceitam AAC, mas MP3 é a opção mais compatível
+ *   com players antigos, que é justamente o motivo de alguém usar esses formatos;
+ * - o resto (mp4, mov, m4v, mkv, ts) vai de AAC.
+ *
+ * O bitrate é generoso de propósito: aqui o objetivo é assistir à reunião, não
+ * economizar espaço, e a limpeza de ruído já é uma perda de informação.
+ */
+export function audioCodecForContainer(extension: string): {
+  codec: string;
+  bitrate: string;
+} {
+  const ext = extension.replace('.', '').toLowerCase();
+  if (ext === 'webm') return { codec: 'libopus', bitrate: '128k' };
+  if (['mpg', 'mpeg', 'avi', 'wmv', 'flv'].includes(ext)) {
+    return { codec: 'libmp3lame', bitrate: '192k' };
+  }
+  return { codec: 'aac', bitrate: '192k' };
+}
+
+/**
  * Gera um caminho de saída que não sobrescreve arquivos existentes:
  * "reuniao.mp3", "reuniao (1).mp3", "reuniao (2).mp3"...
  */
 function resolveOutputPath(
   inputPath: string,
-  format: AudioFormat,
+  /** Extensão da saída, sem ponto (ex.: 'mp3' ou 'mp4'). */
+  extension: string,
   outputDir?: string,
   /** Sufixo opcional no nome (ex.: " - limpo"), para comparar as versões. */
   suffix = ''
@@ -161,10 +220,10 @@ function resolveOutputPath(
   const dir = outputDir && outputDir.trim() ? outputDir : path.dirname(inputPath);
   const base = path.basename(inputPath, path.extname(inputPath)) + suffix;
 
-  let candidate = path.join(dir, `${base}.${format}`);
+  let candidate = path.join(dir, `${base}.${extension}`);
   let counter = 1;
   while (fs.existsSync(candidate)) {
-    candidate = path.join(dir, `${base} (${counter}).${format}`);
+    candidate = path.join(dir, `${base} (${counter}).${extension}`);
     counter += 1;
   }
   return candidate;
@@ -216,9 +275,16 @@ export function startExtraction(
 
   const promise = (async () => {
     const info = await probeVideo(options.inputPath);
+    const mode = options.mode ?? 'audio';
 
     if (!info.hasAudio) {
       throw new Error('Este arquivo não possui nenhuma faixa de áudio.');
+    }
+    if (mode === 'video' && !info.hasVideo) {
+      throw new Error(
+        'Este arquivo não tem faixa de vídeo, então não há vídeo para regravar. ' +
+          'Use o modo "Extrair o áudio".'
+      );
     }
 
     const outputDir =
@@ -233,14 +299,27 @@ export function startExtraction(
     if (denoise !== 'off' && !modelPath) {
       throw new Error('Modelo de redução de ruído não informado.');
     }
+    const normalize = options.normalize ?? false;
+    if (mode === 'video' && denoise === 'off' && !normalize) {
+      throw new Error(
+        'No modo "vídeo com áudio limpo", ligue a redução de ruído ou o ' +
+          'nivelamento de volume — sem nenhum dos dois não há o que melhorar.'
+      );
+    }
+
+    // No modo vídeo a saída mantém o mesmo tipo de arquivo da entrada.
+    const outputExtension =
+      mode === 'video'
+        ? path.extname(options.inputPath).replace('.', '').toLowerCase() || 'mp4'
+        : options.format;
     const suffix = options.preview
       ? ' - previa'
-      : denoise === 'off'
+      : denoise === 'off' && !normalize
         ? ''
         : ' - limpo';
     const outputPath = resolveOutputPath(
       options.inputPath,
-      options.format,
+      outputExtension,
       outputDir,
       suffix
     );
@@ -249,12 +328,13 @@ export function startExtraction(
       ? options.preview.durationSeconds
       : info.durationSeconds;
 
-    // Só medimos o ruído se a limpeza estiver ligada (custa uma passada rápida).
     await new Promise<void>((resolve, reject) => {
       // Guardamos as últimas linhas do stderr para dar um erro útil na UI.
       let stderrTail: string[] = [];
 
-      const base = ffmpeg(options.inputPath).noVideo();
+      // No modo áudio descartamos o vídeo; no modo vídeo ele é copiado.
+      const base = ffmpeg(options.inputPath);
+      if (mode === 'audio') base.noVideo();
 
       // Prévia: pula para o meio da gravação e converte só alguns segundos.
       // seekInput (antes do -i) é muito mais rápido em arquivos grandes.
@@ -264,14 +344,15 @@ export function startExtraction(
           .duration(options.preview.durationSeconds);
       }
 
-      // Filtros de limpeza (nenhum quando denoise === 'off').
-      const filters =
-        denoise === 'off'
-          ? []
-          : buildDenoiseFilters(denoise, modelPath, options.normalize ?? false);
+      // Filtros de limpeza (nenhum quando denoise === 'off' e sem nivelamento).
+      const filters = buildDenoiseFilters(denoise, modelPath, normalize);
       if (filters.length > 0) base.audioFilters(filters);
 
-      command = applyFormat(base, options.format)
+      command = (
+        mode === 'video'
+          ? applyVideoPassthrough(base, outputExtension)
+          : applyFormat(base, options.format)
+      )
         .on('stderr', (line: string) => {
           stderrTail.push(line);
           if (stderrTail.length > 15) stderrTail.shift();
@@ -292,11 +373,9 @@ export function startExtraction(
             reject(new Error('CANCELED'));
             return;
           }
-          reject(
-            new Error(
-              `Falha ao extrair o áudio: ${err.message}\n\n${stderrTail.join('\n')}`
-            )
-          );
+          const acao =
+            mode === 'video' ? 'Falha ao regravar o vídeo' : 'Falha ao extrair o áudio';
+          reject(new Error(`${acao}: ${err.message}\n\n${stderrTail.join('\n')}`));
         })
         .on('end', () => {
           onProgress({ percent: 100, processedSeconds: totalSeconds, totalSeconds });

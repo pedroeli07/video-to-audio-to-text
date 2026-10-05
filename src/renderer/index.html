@@ -41,9 +41,27 @@
         </div>
       </section>
 
-      <!-- 2. Opções -->
+      <!-- 2. O que fazer com o arquivo -->
       <section class="card">
         <div class="row">
+          <span class="label">O que fazer</span>
+          <span class="value modes">
+            <label class="check">
+              <input type="radio" name="mode" value="audio" checked />
+              Extrair o áudio (MP3/WAV)
+            </label>
+            <label class="check">
+              <input type="radio" name="mode" value="video" />
+              Manter o vídeo e só limpar o áudio
+            </label>
+          </span>
+        </div>
+        <p id="mode-hint" class="hint"></p>
+      </section>
+
+      <!-- 3. Opções -->
+      <section class="card">
+        <div class="row" id="row-format">
           <label class="label" for="format">Formato</label>
           <select id="format" class="value">
             <option value="mp3" selected>MP3 (menor, recomendado)</option>
@@ -83,7 +101,7 @@
         </div>
       </section>
 
-      <!-- 3. Ação + progresso -->
+      <!-- 4. Ação + progresso -->
       <section class="actions">
         <button id="btn-extract" class="primary" disabled>Extrair Áudio</button>
         <button id="btn-preview" class="secondary" disabled>Ouvir prévia de 30s</button>
